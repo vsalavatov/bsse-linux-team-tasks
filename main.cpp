@@ -111,13 +111,12 @@ int main(int argc, char **argv) {
 
     for (const auto &elf: dependencies) {
         if (elf.path.empty()) {
-            std::cout << elf.name << ": not found\n";
+            std::cout << elf.name << " => not found\n";
         } else if (elf.dependencies.empty()) {
-            std::cout << elf.name << ": statically linked\n";
+            std::cout << elf.name << " => statically linked\n";
         } else {
-            std::cout << elf.name << ":\n";
             for (const auto &lib: elf.dependencies) {
-                std::cout << "\t" << lib << "\n";
+                std::cout << elf.name << " => " << lib << "\n";
             }
         }
     }
@@ -127,7 +126,7 @@ int main(int argc, char **argv) {
     std::unordered_map<std::string, std::string> import_schema;
     get_import_schema(filename, found_elfs, import_schema);
     for (auto [sym, lib]: import_schema) {
-        std::cout << sym << ": " << lib << "\n";
+        std::cout << sym << " <- " << lib << "\n";
     }
     return 0;
 }

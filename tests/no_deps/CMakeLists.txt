@@ -1,0 +1,1 @@
+add_executable(no_deps_elf main.cpp)
