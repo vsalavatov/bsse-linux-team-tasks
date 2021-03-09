@@ -16,23 +16,23 @@ struct Elf {
     std::vector<std::string> undef_symnames;
     std::unordered_set<std::string> global_symnames;
 
-} typedef Elf;
+};
 
 struct Elf64: public Elf {
     Elf64_Ehdr hdr;
     std::vector<Elf64_Dyn> needed_libs;
-} typedef Elf64;
+};
 
 struct Elf32: public Elf {
     Elf32_Ehdr hdr;
     std::vector<Elf32_Dyn> needed_libs;
-} typedef Elf32;
+};
 
-typedef struct {
+struct Elf_Dependencies {
     std::string name;
     std::string path;
     std::vector<std::string> dependencies;
-} Elf_Dependencies;
+};
 
 bool is_valid_elf(const char *filename, std::string &err_message);
 Elf read_elf(const char *filename);
