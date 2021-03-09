@@ -7,13 +7,13 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <sstream>
 #include <unordered_set>
 #include <unordered_map>
 #include <dirent.h>
 #include <sys/stat.h>
 
 #include "elf_parser.h"
-
 
 std::string find_lib_path(const std::string &libname, const std::vector<std::string> &lib_search_paths) {
     for (const auto &path: lib_search_paths) {
@@ -47,6 +47,20 @@ void find_needed_libs(const char *name, const char *path, std::unordered_set<std
     }
 }
 
+std::vector<std::string> parse_ld_library_path() {
+    auto ld_library_path = std::getenv("LD_LIBRARY_PATH");
+    if (ld_library_path == NULL)
+        return {};
+    std::string value(ld_library_path);
+    auto valueSS = std::stringstream{value};
+    std::vector<std::string> paths;
+    for (std::string line; std::getline(valueSS, line, ':');) {
+        if (!line.empty())
+            paths.push_back(line);
+    }
+    return paths;
+}
+
 void collect_paths(std::vector<std::string> &paths) {
     paths.insert(paths.end(), {"/lib", "/usr/lib", "/usr/local/lib", "."});
     std::string dir = "/etc/ld.so.conf.d";
@@ -67,6 +81,9 @@ void collect_paths(std::vector<std::string> &paths) {
         }
     }
     (void) closedir(dirp);
+
+    auto from_env = parse_ld_library_path();
+    paths.insert(paths.begin(), from_env.begin(), from_env.end());
 }
 
 void get_import_schema(const char* name, std::unordered_map<std::string, Elf> &found_elfs,

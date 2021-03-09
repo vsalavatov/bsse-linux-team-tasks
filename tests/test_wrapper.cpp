@@ -31,8 +31,8 @@ static std::string stripPath(const std::string& path) {
 }
 
 void runTest(int argc, char** argv,
-             const std::unordered_map<std::string, std::string> &expected_dependency_graph,
-             const std::unordered_map<std::string, std::string> &expected_symbol_import_scheme) {
+             const std::set<std::pair<std::string, std::string>> &expected_dependency_graph,
+             const std::set<std::pair<std::string, std::string>> &expected_symbol_import_scheme) {
     if (argc != 3) {
         std::cout << "Bad arguments.\n"
                      "Usage: " << argv[0] << " <path-to-my_ldd> <path-to-elf-binary>" << std::endl;
@@ -40,8 +40,8 @@ void runTest(int argc, char** argv,
         return;
     }
 
-    std::unordered_map<std::string, std::string> actual_dependency_graph;
-    std::unordered_map<std::string, std::string> actual_symbol_import_scheme;
+    std::set<std::pair<std::string, std::string>> actual_dependency_graph;
+    std::set<std::pair<std::string, std::string>> actual_symbol_import_scheme;
 
     const std::string dep_sym{" => "};
     const std::string import_sym{" <- "};
@@ -87,31 +87,25 @@ void runTest(int argc, char** argv,
         std::cout << "TestFailed" << std::endl;
         std::cout << "Diff:" << std::endl;
         for (const auto& [k, v] : expected_dependency_graph) {
-            if (actual_dependency_graph.find(k) == actual_dependency_graph.end()) {
+            if (actual_dependency_graph.find({k, v}) == actual_dependency_graph.end()) {
                 std::cout << "Expected dependency: " << k << dep_sym << v << std::endl;
                 std::cout << "But it wasn't detected." << std::endl;
-            } else if (actual_dependency_graph[k] != v) {
-                std::cout << "Expected dependency: " << k << dep_sym << v << std::endl;
-                std::cout << "But got: " << k << dep_sym << actual_dependency_graph[k] << std::endl;
             }
         }
         for (const auto& [k, v] : actual_dependency_graph) {
-            if (expected_dependency_graph.find(k) == expected_dependency_graph.end()) {
+            if (expected_dependency_graph.find({k, v}) == expected_dependency_graph.end()) {
                 std::cout << "Detected unexpected dependency: " << k << dep_sym << v << std::endl;
             }
         }
 
         for (const auto& [k, v] : expected_symbol_import_scheme) {
-            if (actual_symbol_import_scheme.find(k) == actual_symbol_import_scheme.end()) {
+            if (actual_symbol_import_scheme.find({k, v}) == actual_symbol_import_scheme.end()) {
                 std::cout << "Expected import: " << k << import_sym << v << std::endl;
                 std::cout << "But it wasn't detected." << std::endl;
-            } else if (actual_symbol_import_scheme[k] != v) {
-                std::cout << "Expected import: " << k << import_sym << v << std::endl;
-                std::cout << "But got: " << k << import_sym << actual_symbol_import_scheme[k] << std::endl;
             }
         }
         for (const auto& [k, v] : actual_symbol_import_scheme) {
-            if (expected_symbol_import_scheme.find(k) == expected_symbol_import_scheme.end()) {
+            if (expected_symbol_import_scheme.find({k, v}) == expected_symbol_import_scheme.end()) {
                 std::cout << "Detected unexpected import: " << k << import_sym << v << std::endl;
             }
         }
