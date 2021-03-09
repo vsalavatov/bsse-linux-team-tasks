@@ -15,7 +15,7 @@
 #include "elf_parser.h"
 
 
-std::string find_lib_path(const std::string &libname, const std::unordered_set<std::string> &lib_search_paths) {
+std::string find_lib_path(const std::string &libname, const std::vector<std::string> &lib_search_paths) {
     for (const auto &path: lib_search_paths) {
         const std::string path_to_lib = path + "/" + libname;
         std::string err_message;
@@ -27,7 +27,7 @@ std::string find_lib_path(const std::string &libname, const std::unordered_set<s
 }
 
 void find_needed_libs(const char *name, const char *path, std::unordered_set<std::string> &all_libnames,
-                      std::vector<Elf_Dependencies> &dependencies, const std::unordered_set<std::string> &lib_search_paths,
+                      std::vector<Elf_Dependencies> &dependencies, const std::vector<std::string> &lib_search_paths,
                       std::unordered_map<std::string, Elf>& found_elfs) {
     Elf elf = read_elf(path);
 
@@ -47,8 +47,8 @@ void find_needed_libs(const char *name, const char *path, std::unordered_set<std
     }
 }
 
-void collect_paths(std::unordered_set<std::string> &paths) {
-    paths.insert({"/lib", "/usr/lib", "/usr/local/lib", "."});
+void collect_paths(std::vector<std::string> &paths) {
+    paths.insert(paths.end(), {"/lib", "/usr/lib", "/usr/local/lib", "."});
     std::string dir = "/etc/ld.so.conf.d";
 
     DIR *dirp = opendir(dir.c_str());
@@ -63,7 +63,7 @@ void collect_paths(std::unordered_set<std::string> &paths) {
         std::string line;
         while (std::getline(fin, line)) {
             if (!line.empty() && line[0] != '#')
-                paths.insert(line);
+                paths.push_back(line);
         }
     }
     (void) closedir(dirp);
@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
-    std::unordered_set<std::string> lib_search_paths;
+    std::vector<std::string> lib_search_paths;
     collect_paths(lib_search_paths);
 
     std::unordered_set<std::string> all_libnames;
