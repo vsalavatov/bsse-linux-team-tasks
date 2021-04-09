@@ -1,104 +1,113 @@
-#ifndef BABLIB_H
-#define BABLIB_H
-
+#include <functional>
+#include <ranges>
+#include <variant>
+#include <map>
+#include <utility>
+#include <concepts>
+#include <optional>
 #include <memory>
 #include <string>
-#include <variant>
-#include <unordered_map>
+#include <string_view>
+#include <vector>
 
-class LibraryEntity;
-class Book;
-class Shelf;
-class Bookcase;
-class Room;
-class Table;
-class Bucket;
+using Index = std::size_t;
 
-class Library : public std::enable_shared_from_this<Library> {
+constexpr Index BOOKS_IN_SHELF = 32;
+
+template <typename T>
+concept ConstructibleFromIndex = requires() {
+  T(std::declval<Index>());
+};
+
+class BabEntity {
 public:
-    explicit Library(uint64_t roomCount, uint64_t rootId);
-    Library(const Library&) = delete;
-    Library(Library &&) = delete;
+  virtual ~BabEntity() = default;
+};
 
-    std::shared_ptr<Room> getRootRoom();
-
-    std::shared_ptr<LibraryEntity> resolve(const std::string_view &path);
-
+class BabBook : public BabEntity {
+public:
+  BabBook(Index index) : index{index} {}
 private:
-    std::shared_ptr<Room> getRoom(uint64_t id);
-
-    const uint64_t roomCount_;
-    const uint64_t rootId_;
-    std::unordered_map<uint64_t, std::shared_ptr<Room>> roomStorage_;
-
-    friend class Room;
+  Index index;
 };
 
-class LibraryEntity: public std::enable_shared_from_this<LibraryEntity> {
+class BabDirectory : public BabEntity {
 public:
-    virtual ~LibraryEntity() {};
-    virtual bool isContainer() const = 0;
-    virtual std::vector<std::shared_ptr<LibraryEntity>> getEntities() const = 0;
-    virtual std::string getName() const = 0;
-    virtual std::shared_ptr<LibraryEntity> resolve(const std::string_view path) const;
+  virtual std::vector<std::string> listMembers() = 0;
+  virtual BabEntity *lookupMember(std::string_view memberName) = 0;
+  virtual ~BabDirectory() = default;
 };
 
-class Room : public LibraryEntity {
+template <Index N, std::string MakeNameFromIndex(Index), ConstructibleFromIndex T>
+class BabIndexedDirectoryWithMembers : public BabDirectory {
 public:
-    const static std::size_t BOOKCASES_COUNT = 4;
+  /* BabIndexedDirectoryWithMembers(Index idx) : BabIndexedDirectoryWithMembers(idx, std::make_index_sequence<N>{}) {} */
+  BabIndexedDirectoryWithMembers(Index index) {
+    for (Index i = 0; i < N; ++i) {
+      nameToMember.emplace(MakeNameFromIndex(i), LazyMember{index * N + i});
+    }
+  }
 
-    explicit Room(std::shared_ptr<Library> lib, uint64_t id);
-    Room(const Room &) = delete;
-    Room(Room&&) = delete;
-    ~Room() = default;
+  virtual std::vector<std::string> listMembers() override { 
+    auto &&r = std::views::keys(nameToMember) | std::views::common;
+    return {r.begin(), r.end()};
+  }
+  virtual BabEntity *lookupMember(std::string_view memberName) override { 
+    if (auto it = nameToMember.find(memberName); it != nameToMember.end()) {
+      return &accessMember(it->second);
+    } else {
+      return nullptr;
+    }
+  }
+protected:
+  using LazyMember = std::variant<Index, std::unique_ptr<T>>;
 
-    std::string getName() const override;
-
-    std::shared_ptr<Room> previousRoom();
-    std::shared_ptr<Room> nextRoom();
-
-    const std::array<std::shared_ptr<Bookcase>, BOOKCASES_COUNT> &getBookcases() const;
-    void renameBookcase(const std::string &prevName, const std::string& newName);
-
-    LibraryEntity resolve(const std::string_view &path);
+  T& accessMember(LazyMember& member) {
+    if (auto idxPtr = std::get_if<Index>(&member)) {
+      member = std::make_unique<T>(*idxPtr);
+    }
+    return *std::get<std::unique_ptr<T>>(member);
+  }
 private:
-    uint64_t id_;
-    std::array<std::shared_ptr<Bookcase>, BOOKCASES_COUNT> bookcases_;
-    
-    std::shared_ptr<Library> library_;
-    std::shared_ptr<Room> nextRoom_, prevRoom_;
+  /* template <Index... I> */
+  /* BabIndexedDirectoryWithMembers(Index idx, std::index_sequence<I...>) : */
+  /*   nameToMember(makeMap(std::initializer_list{std::make_pair(MakeNameFromIndex(I), LazyMember{idx * N + I})...})) { */
+  /*   std::pair<std::string, LazyMember> p = {"kek", LazyMember{std::size_t(0)}}; */
+  /*   auto p1 = std::move(p); */
+  /* } */
+    /* nameToMember{std::move(std::make_pair(MakeNameFromIndex(0), std::move(LazyMember{idx * N + 0})))} {} */
+    /* nameToMember{} {} */
+  /* std::map<std::string, LazyMember, std::less<void>> makeMap(std::initializer_list<std::pair<std::string, LazyMember>>&& initList) { */
+    /* auto v = std::vector{std::make_move_iterator(initList.begin()), std::make_move_iterator(initList.end())}; */
+    /* std::map<std::string, LazyMember, std::less<void>> m; */
+    /* for (auto&& [k, v] : */ 
+    /* std::map<std::string, LazyMember, std::less<void>> m(std::make_move_iterator(v.begin()), std::make_move_iterator(v.end())); */
+    /* std::map<std::string, LazyMember> m; */
+    /* m.emplace(MakeNameFromIndex(0), std::move(LazyMember{0 * N + 0})); */
+    /* std::map<std::string, LazyMember> m(std::make_move_iterator(v.begin()), std::make_move_iterator(v.end())); */
+    /* auto m = std::map{std::make_move_iterator(initList.begin()), std::make_move_iterator(initList.end())}; */
+    /* std::map<std::string, LazyMember> m; */
+    /* for (auto& [k, v] : initList) { */
+    /*   m.emplace(k, std::move(v)); */
+    /* } */
+    /* std::ranges::move(initList, m.begin()); */
+    /* return std::map<std::string, LazyMember, std::less<void>>{std::make_move_iterator(std::begin(initList)), std::make_move_iterator(std::end(initList))}; */
+  /* } */
+
+protected:
+  // See https://stackoverflow.com/a/35525806/6508598
+  std::map<std::string, LazyMember, std::less<>> nameToMember;
 };
 
-class Bookcase : public LibraryEntity {
-public:
-    const static std::size_t SHELVES_COUNT = 5;
+std::string nameByPrefix(std::string prefix, Index idx) {
+  return prefix + std::to_string(idx);
+}
 
-    Bookcase(std::shared_ptr<Room> room, std::string name);
-    LibraryEntity resolve(const std::string_view &path);
+std::string nameBook(Index idx) {
+  return nameByPrefix("book", idx);
+}
 
-    std::string getName() const;
+using BabShelf = BabIndexedDirectoryWithMembers<BOOKS_IN_SHELF, nameBook, BabBook>;
 
-    const std::array<const std::shared_ptr<Shelf>, SHELVES_COUNT> getShelves() const;
-    void renameShelf(const std::string& prevName, const std::string &newName);
 
-private:
-    void setName(const std::string &newName);
 
-    std::string name_;
-    std::shared_ptr<Room> room_;
-    std::array<std::shared_ptr<Shelf>, SHELVES_COUNT> shelves_;
-
-    friend class Room;
-};
-
-class Shelf : public LibraryEntity {
-
-};
-
-class Book : public LibraryEntity {};
-
-class Table : public LibraryEntity {};
-
-class Bucket : public LibraryEntity {};
-
-#endif
