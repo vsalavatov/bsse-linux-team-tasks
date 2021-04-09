@@ -10,9 +10,9 @@
 #include <string_view>
 #include <vector>
 
-using Index = std::size_t;
+#include "utils.h"
 
-constexpr Index BOOKS_IN_SHELF = 32;
+using Index = std::size_t;
 
 template <typename T>
 concept ConstructibleFromIndex = requires() {
@@ -38,76 +38,61 @@ public:
   virtual ~BabDirectory() = default;
 };
 
-template <Index N, std::string MakeNameFromIndex(Index), ConstructibleFromIndex T>
+template <Index N, ConstructibleFromIndex T, char... MemberName>
 class BabIndexedDirectoryWithMembers : public BabDirectory {
 public:
-  /* BabIndexedDirectoryWithMembers(Index idx) : BabIndexedDirectoryWithMembers(idx, std::make_index_sequence<N>{}) {} */
-  BabIndexedDirectoryWithMembers(Index index) {
-    for (Index i = 0; i < N; ++i) {
-      nameToMember.emplace(MakeNameFromIndex(i), LazyMember{index * N + i});
-    }
-  }
+  BabIndexedDirectoryWithMembers(Index index) : index{index} {}
 
   virtual std::vector<std::string> listMembers() override { 
-    auto &&r = std::views::keys(nameToMember) | std::views::common;
+    auto &&r = std::views::keys(nameToMember()) | std::views::common;
     return {r.begin(), r.end()};
   }
+
   virtual BabEntity *lookupMember(std::string_view memberName) override { 
-    if (auto it = nameToMember.find(memberName); it != nameToMember.end()) {
-      return &accessMember(it->second);
+    if (auto it = nameToMember().find(memberName); it != nameToMember().end()) {
+      return &it->second;
     } else {
       return nullptr;
     }
   }
 protected:
-  using LazyMember = std::variant<Index, std::unique_ptr<T>>;
-
-  T& accessMember(LazyMember& member) {
-    if (auto idxPtr = std::get_if<Index>(&member)) {
-      member = std::make_unique<T>(*idxPtr);
+  // See https://stackoverflow.com/a/35525806/6508598
+  using NameToMemberMap = std::map<std::string, T, std::less<>>;
+  NameToMemberMap& nameToMember() {
+    if (!maybeNameToMember) {
+      initNameToMember();
     }
-    return *std::get<std::unique_ptr<T>>(member);
+    return maybeNameToMember.value();
   }
-private:
-  /* template <Index... I> */
-  /* BabIndexedDirectoryWithMembers(Index idx, std::index_sequence<I...>) : */
-  /*   nameToMember(makeMap(std::initializer_list{std::make_pair(MakeNameFromIndex(I), LazyMember{idx * N + I})...})) { */
-  /*   std::pair<std::string, LazyMember> p = {"kek", LazyMember{std::size_t(0)}}; */
-  /*   auto p1 = std::move(p); */
-  /* } */
-    /* nameToMember{std::move(std::make_pair(MakeNameFromIndex(0), std::move(LazyMember{idx * N + 0})))} {} */
-    /* nameToMember{} {} */
-  /* std::map<std::string, LazyMember, std::less<void>> makeMap(std::initializer_list<std::pair<std::string, LazyMember>>&& initList) { */
-    /* auto v = std::vector{std::make_move_iterator(initList.begin()), std::make_move_iterator(initList.end())}; */
-    /* std::map<std::string, LazyMember, std::less<void>> m; */
-    /* for (auto&& [k, v] : */ 
-    /* std::map<std::string, LazyMember, std::less<void>> m(std::make_move_iterator(v.begin()), std::make_move_iterator(v.end())); */
-    /* std::map<std::string, LazyMember> m; */
-    /* m.emplace(MakeNameFromIndex(0), std::move(LazyMember{0 * N + 0})); */
-    /* std::map<std::string, LazyMember> m(std::make_move_iterator(v.begin()), std::make_move_iterator(v.end())); */
-    /* auto m = std::map{std::make_move_iterator(initList.begin()), std::make_move_iterator(initList.end())}; */
-    /* std::map<std::string, LazyMember> m; */
-    /* for (auto& [k, v] : initList) { */
-    /*   m.emplace(k, std::move(v)); */
-    /* } */
-    /* std::ranges::move(initList, m.begin()); */
-    /* return std::map<std::string, LazyMember, std::less<void>>{std::make_move_iterator(std::begin(initList)), std::make_move_iterator(std::end(initList))}; */
-  /* } */
+
+  // do we need virtual here?
+  virtual void initNameToMember() {
+    maybeNameToMember = NameToMemberMap{};
+    auto& map = maybeNameToMember.value();
+    for (Index i = 0; i < N; ++i) {
+      auto name = std::string{MemberName...} + std::to_string(i);
+      map.emplace(name, T(index * N + i));
+    }
+  }
 
 protected:
-  // See https://stackoverflow.com/a/35525806/6508598
-  std::map<std::string, LazyMember, std::less<>> nameToMember;
+  std::optional<NameToMemberMap> maybeNameToMember;
+private:
+  Index index;
 };
 
-std::string nameByPrefix(std::string prefix, Index idx) {
-  return prefix + std::to_string(idx);
-}
 
-std::string nameBook(Index idx) {
-  return nameByPrefix("book", idx);
-}
+constexpr Index ROOMS = 1ULL << 54;
+constexpr Index BOOKCASES_IN_ROOM = 4;
+constexpr Index SHELVES_IN_BOOKCASE = 5;
+constexpr Index BOOKS_IN_SHELF = 32;
 
-using BabShelf = BabIndexedDirectoryWithMembers<BOOKS_IN_SHELF, nameBook, BabBook>;
+using BabShelf = BabIndexedDirectoryWithMembers<BOOKS_IN_SHELF, BabBook, 'b', 'o', 'o', 'k'>;
+using BabBookcase = BabIndexedDirectoryWithMembers<SHELVES_IN_BOOKCASE, BabShelf, 's', 'h', 'e', 'l', 'f'>;
 
+using BabRoomBase = BabIndexedDirectoryWithMembers<BOOKCASES_IN_ROOM, BabBookcase, 'b', 'o', 'o', 'k', 'c', 'a', 's', 'e'>;
 
-
+class BabRoom : public BabRoomBase {
+protected:
+  virtual void initNameToMember() override;
+};
