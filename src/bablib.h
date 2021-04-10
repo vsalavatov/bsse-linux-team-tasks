@@ -5,100 +5,172 @@
 #include <string>
 #include <variant>
 #include <unordered_map>
+#include <vector>
+#include <string_view>
+#include <functional>
+#include <mutex>
 
-class LibraryEntity;
+
+#define BOOKCASES_COUNT 4
+#define SHELVES_COUNT 5
+
+class BabLibException : public std::runtime_error {
+public:
+    BabLibException(const std::string &msg);
+};
+
 class Book;
 class Shelf;
 class Bookcase;
 class Room;
 class Table;
-class Bucket;
+class Basket;
+class Note;
 
-class Library : public std::enable_shared_from_this<Library> {
+using LibraryEntity = std::variant<
+    Room*,
+    Bookcase*,
+    Shelf*,
+    Book*,
+    Table*,
+    Basket*,
+    Note*
+>;
+
+template<class T>
+class LibraryEntityVisitor {
+public:
+    std::function<T(Room*)> roomHandler;
+    std::function<T(Bookcase*)> bookcaseHandler;
+    std::function<T(Shelf*)> shelfHandler;
+    std::function<T(Book*)> bookHandler;
+    std::function<T(Table*)> tableHandler;
+    std::function<T(Basket*)> basketHandler;
+    std::function<T(Note*)> noteHandler;
+
+    T visit(LibraryEntity entity) {
+        if (auto room = std::get_if<Room*>(&entity)) {
+            return roomHandler(*room);
+        }
+        if (auto bc = std::get_if<Bookcase*>(&entity)) {
+            return bookcaseHandler(*bc);
+        }
+        if (auto shelf = std::get_if<Shelf*>(&entity)) {
+            return shelfHandler(*shelf);
+        }
+        if (auto book = std::get_if<Book*>(&entity)) {
+            return bookHandler(*book);
+        }
+        if (auto table = std::get_if<Table*>(&entity)) {
+            return tableHandler(*table);
+        }
+        if (auto basket = std::get_if<Basket*>(&entity)) {
+            return basketHandler(*basket);
+        }
+        if (auto note = std::get_if<Note*>(&entity)) {
+            return noteHandler(*note);
+        }
+        throw BabLibException("o_O? visitor has failed");
+    }
+};
+
+std::string_view extractFirstToken(std::string_view &path);
+std::string_view removeLastToken(std::string_view path);
+
+bool isContainer(LibraryEntity entity);
+std::vector<std::string> getContainedEntities(LibraryEntity entity);
+
+
+class Library {
 public:
     explicit Library(uint64_t roomCount, uint64_t rootId);
     Library(const Library&) = delete;
     Library(Library &&) = delete;
 
-    std::shared_ptr<Room> getRootRoom();
+    Room* getRootRoom();
 
-    std::shared_ptr<LibraryEntity> resolve(const std::string_view &path);
+    LibraryEntity resolve(std::string_view path);
 
 private:
-    std::shared_ptr<Room> getRoom(uint64_t id);
+    Room* getRoom(uint64_t id);
+
+    class Resolver : public LibraryEntityVisitor<LibraryEntity> {
+    public:
+        Resolver(std::string_view path);
+
+        std::string_view path_;
+    };
 
     const uint64_t roomCount_;
     const uint64_t rootId_;
-    std::unordered_map<uint64_t, std::shared_ptr<Room>> roomStorage_;
+    std::unordered_map<uint64_t, std::unique_ptr<Room>> roomStorage_;
 
     friend class Room;
 };
 
-class LibraryEntity: public std::enable_shared_from_this<LibraryEntity> {
+class Room {
 public:
-    virtual ~LibraryEntity() {};
-    virtual bool isContainer() const = 0;
-    virtual std::vector<std::shared_ptr<LibraryEntity>> getEntities() const = 0;
-    virtual std::string getName() const = 0;
-    virtual std::shared_ptr<LibraryEntity> resolve(const std::string_view path) const;
-};
-
-class Room : public LibraryEntity {
-public:
-    const static std::size_t BOOKCASES_COUNT = 4;
-
-    explicit Room(std::shared_ptr<Library> lib, uint64_t id);
+    explicit Room(Library* lib, uint64_t id);
     Room(const Room &) = delete;
     Room(Room&&) = delete;
-    ~Room() = default;
-
-    std::string getName() const override;
-
-    std::shared_ptr<Room> previousRoom();
-    std::shared_ptr<Room> nextRoom();
-
-    const std::array<std::shared_ptr<Bookcase>, BOOKCASES_COUNT> &getBookcases() const;
-    void renameBookcase(const std::string &prevName, const std::string& newName);
-
-    LibraryEntity resolve(const std::string_view &path);
-private:
-    uint64_t id_;
-    std::array<std::shared_ptr<Bookcase>, BOOKCASES_COUNT> bookcases_;
-    
-    std::shared_ptr<Library> library_;
-    std::shared_ptr<Room> nextRoom_, prevRoom_;
-};
-
-class Bookcase : public LibraryEntity {
-public:
-    const static std::size_t SHELVES_COUNT = 5;
-
-    Bookcase(std::shared_ptr<Room> room, std::string name);
-    LibraryEntity resolve(const std::string_view &path);
 
     std::string getName() const;
 
-    const std::array<const std::shared_ptr<Shelf>, SHELVES_COUNT> getShelves() const;
-    void renameShelf(const std::string& prevName, const std::string &newName);
+    Room* previousRoom();
+    Room* nextRoom();
+
+    std::array<Bookcase*, BOOKCASES_COUNT> getBookcases();
+    void renameBookcase(const std::string &prevName, const std::string& newName);
+
+private:
+    Library* library_;
+    uint64_t id_;
+    std::array<std::unique_ptr<Bookcase>, BOOKCASES_COUNT> bookcases_;
+};
+
+class Bookcase {
+public:
+    Bookcase(Room* room, std::string name);
+    Bookcase(const Bookcase &) = delete;
+    Bookcase(Bookcase&&) = delete;
+
+    std::string getName() const;
+
+    std::array<Shelf*, SHELVES_COUNT> getShelves();
+    Room* getOwnerRoom();
 
 private:
     void setName(const std::string &newName);
 
+    Room* room_;
     std::string name_;
-    std::shared_ptr<Room> room_;
-    std::array<std::shared_ptr<Shelf>, SHELVES_COUNT> shelves_;
+    std::array<std::unique_ptr<Shelf>, SHELVES_COUNT> shelves_;
 
     friend class Room;
 };
 
-class Shelf : public LibraryEntity {
+class Shelf : public std::enable_shared_from_this<Shelf> {
+public:
+    Shelf(Bookcase* bookcase, const std::string& name);
+    Shelf(const Shelf &) = delete;
+    Shelf(Shelf&&) = delete;
 
+    std::string getName() const;
+private:
+    std::string name_;
+    Bookcase* bookcase_;
 };
 
-class Book : public LibraryEntity {};
+
+        /*
+аfriend class Bookcase;lass Book : public LibraryEntity {
+pu
+blic:
+    bool isContainer() const override;
+};
 
 class Table : public LibraryEntity {};
 
-class Bucket : public LibraryEntity {};
-
+class Basket : public LibraryEntity {};
+*/
 #endif
