@@ -42,7 +42,21 @@ std::vector<std::string> getContainedEntities(LibraryEntity entity) {
             for (const auto& s : bookcase->getShelves())
                 names.push_back(s->getName());
             return names;
+        },
+        .shelfHandler = [](Shelf* shelf) {
+            std::vector<std::string> names;
+            for (const auto& b : shelf->getBooks())
+                names.push_back(b->getName());
+            return names;
         }
+    }.visit(entity);
+}
+
+std::string getName(LibraryEntity entity) {
+    return LibraryEntityVisitor<std::string>{
+            .bookHandler = [](Book *book) {
+                return book->getName();
+            }
     }.visit(entity);
 }
 
@@ -100,6 +114,15 @@ LibraryEntity Library::resolve(std::string_view path) {
                     return shelf;
             }
             throw BabLibException("no such room or shelf");
+        },
+        .shelfHandler = [&path](Shelf* s) -> LibraryEntity {
+            if (path.length() == 0) return s;
+            auto firstName = extractFirstToken(path);
+            for (auto book : s->getBooks()) {
+                if (firstName == book->getName())
+                    return book;
+            }
+            throw BabLibException("no such book");
         }
     };
 
@@ -121,15 +144,18 @@ Room* Library::getRoom(uint64_t id) {
  */
 
 Room::Room(Library* lib, uint64_t id): library_{lib}, id_{id} {
-    for (std::size_t i = 0; i < BOOKCASES_COUNT; i++) {
-        uint64_t bcId = id_ * 123124 + 5232 + i;
-        bookcases_[i] = std::make_unique<Bookcase>(this, "bookcase_" + std::to_string(bcId));
+    for (std::size_t bcId = 0; bcId < BOOKCASES_COUNT; bcId++) {
+        bookcases_[bcId] = std::make_unique<Bookcase>(this, bcId);
     }
 }
  
 std::string Room::getName() const {
     return "room_" + std::to_string(id_);
-};
+}
+
+uint64_t Room::getId() const {
+    return id_;
+}
 
 Room* Room::previousRoom() {
     return library_->getRoom((id_ - 1 + library_->roomCount_) % library_-> roomCount_);
@@ -155,9 +181,10 @@ void Room::renameBookcase(const std::string& prevName, const std::string& newNam
 * Bookcase
 */
 
-Bookcase::Bookcase(Room* room, std::string name): room_{room}, name_{name} {
-    for (std::size_t i = 0; i < SHELVES_COUNT; i++) {
-        shelves_[i] = std::make_unique<Shelf>(this, "shelf_" + std::to_string(i));
+Bookcase::Bookcase(Room* room, uint64_t id): room_{room}, id_{id} {
+    name_ = "bookcase_" + std::to_string(id);
+    for (std::size_t sId = 0; sId < SHELVES_COUNT; sId++) {
+        shelves_[sId] = std::make_unique<Shelf>(this, sId);
     }
 }
 
@@ -165,8 +192,12 @@ std::string Bookcase::getName() const {
     return name_;
 }
 
+uint64_t Bookcase::getId() const {
+    return id_;
+}
+
 std::array<Shelf*, SHELVES_COUNT> Bookcase::getShelves() {
-    std::array<Shelf*, SHELVES_COUNT> a;
+    std::array<Shelf*, SHELVES_COUNT> a{};
     for (std::size_t i = 0; i < SHELVES_COUNT; i++) {
         a[i] = shelves_[i].get();
     }
@@ -181,21 +212,37 @@ Room* Bookcase::getOwnerRoom() {
  * Shelf
  */
 
-Shelf::Shelf(Bookcase* bookcase, const std::string& name): bookcase_{bookcase}, name_{name} {
+Shelf::Shelf(Bookcase* bookcase, uint64_t id): bookcase_{bookcase}, id_{id} {
+    name_ = "shelf_" + std::to_string(id);
+    for (std::size_t i = 0; i < BOOKS_COUNT; i++) {
+        uint64_t rId = bookcase->getOwnerRoom()->getId();
+        uint64_t bcId = bookcase->getId();
+        uint64_t bId = ((rId * BOOKCASES_COUNT + bcId) * SHELVES_COUNT + id_) * BOOKS_COUNT + i;
+        books_[i] = std::make_unique<Book>(bId);
+    }
 }
 
 std::string Shelf::getName() const {
     return name_;
 }
 
-
+std::array<Book*, BOOKS_COUNT> Shelf::getBooks() {
+    std::array<Book*, BOOKS_COUNT> a{};
+    for (std::size_t i = 0; i < BOOKS_COUNT; i++) {
+        a[i] = books_[i].get();
+    }
+    return a;
+}
 
 /**
  * Book
  */
-/*
-bool Book::isContainer() const {
-    return false;
-}*/
+
+Book::Book(uint64_t id): id_{id} {
+}
+
+std::string Book::getName() const {
+    return "book_" + std::to_string(id_);
+}
 
 

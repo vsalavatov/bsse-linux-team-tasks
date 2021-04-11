@@ -13,10 +13,12 @@
 
 #define BOOKCASES_COUNT 4
 #define SHELVES_COUNT 5
+#define BOOKS_COUNT 32
+#define BOOK_SIZE 1048576ul // TODO
 
 class BabLibException : public std::runtime_error {
 public:
-    BabLibException(const std::string &msg);
+    explicit BabLibException(const std::string &msg);
 };
 
 class Book;
@@ -76,6 +78,7 @@ public:
 
 std::string_view extractFirstToken(std::string_view &path);
 std::string_view removeLastToken(std::string_view path);
+std::string getName(LibraryEntity entity);
 
 bool isContainer(LibraryEntity entity);
 std::vector<std::string> getContainedEntities(LibraryEntity entity);
@@ -115,6 +118,7 @@ public:
     Room(Room&&) = delete;
 
     std::string getName() const;
+    std::uint64_t getId() const;
 
     Room* previousRoom();
     Room* nextRoom();
@@ -130,11 +134,12 @@ private:
 
 class Bookcase {
 public:
-    Bookcase(Room* room, std::string name);
+    Bookcase(Room* room, uint64_t id);
     Bookcase(const Bookcase &) = delete;
     Bookcase(Bookcase&&) = delete;
 
     std::string getName() const;
+    uint64_t getId() const;
 
     std::array<Shelf*, SHELVES_COUNT> getShelves();
     Room* getOwnerRoom();
@@ -144,31 +149,41 @@ private:
 
     Room* room_;
     std::string name_;
+    uint64_t id_;
     std::array<std::unique_ptr<Shelf>, SHELVES_COUNT> shelves_;
 
     friend class Room;
 };
 
-class Shelf : public std::enable_shared_from_this<Shelf> {
+class Shelf {
 public:
-    Shelf(Bookcase* bookcase, const std::string& name);
+    Shelf(Bookcase* bookcase, uint64_t id);
     Shelf(const Shelf &) = delete;
     Shelf(Shelf&&) = delete;
 
     std::string getName() const;
+
+    std::array<Book*, BOOKS_COUNT> getBooks();
 private:
-    std::string name_;
     Bookcase* bookcase_;
+    std::string name_;
+    uint64_t id_;
+
+    std::array<std::unique_ptr<Book>, BOOKS_COUNT> books_;
 };
 
+class Book {
+public:
+    explicit Book(uint64_t id);
+    Book(const Book &) = delete;
+    Book(Book&&) = delete;
 
-        /*
-аfriend class Bookcase;lass Book : public LibraryEntity {
-pu
-blic:
-    bool isContainer() const override;
+    std::string getName() const;
+private:
+    uint64_t id_;
 };
 
+/*
 class Table : public LibraryEntity {};
 
 class Basket : public LibraryEntity {};

@@ -7,6 +7,27 @@
 
 std::shared_ptr<Library> lib = std::make_shared<Library>(10, 0);
 
+const char alphabet[28] = {'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','.',','};
+
+uint64_t hash(const std::string &str) {
+    uint64_t hash = 5381;
+    for (char c: str)
+        hash = ((hash << 5) + hash) + c;
+    return hash;
+}
+
+uint64_t xorshift64(uint64_t *state) {
+    if (*state == 0) {
+        *state = 1;
+    }
+
+    uint64_t x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    return *state = x;
+}
+
 static void *bablib_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
     std::cerr << "bablib_init" << std::endl;
 	(void) conn;
@@ -24,7 +45,9 @@ static int bablib_getattr(const char *path, struct stat *stbuf, struct fuse_file
         if (isContainer(entity)) {
             stbuf->st_mode = S_IFDIR | 0555;
         } else {
-            stbuf->st_mode = S_IFREG | 0444;
+            stbuf->st_mode = S_IFREG | 0555;
+            stbuf->st_nlink = 1;
+            stbuf->st_size = BOOK_SIZE;
         }
     } catch (std::exception &e) {
         std::cerr << "Something went wrong: " << e.what() << std::endl;
@@ -62,11 +85,57 @@ static int bablib_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     return res;
 }
 
+static int bablib_open(const char *path, struct fuse_file_info *fi)
+{
+    std::cerr << "bablib_open path=" << path << std::endl;
+    try {
+        LibraryEntity entity = lib->resolve(path);
+        if (!isContainer(entity)) {
+            if ((fi->flags & O_ACCMODE) != O_RDONLY)
+                return -EACCES;
+        } else
+            return -EISDIR;
+    } catch (std::exception &e) {
+        std::cerr << "Something went wrong: " << e.what() << std::endl;
+        return -ENOENT;
+    }
+    return 0;
+}
+
+static int bablib_read(const char *path, char *buf, size_t size, off_t offset,
+                      struct fuse_file_info *fi)
+{
+    std::cerr << "bablib_read path=" << path << std::endl;
+    (void) fi;
+    try {
+        LibraryEntity entity = lib->resolve(path);
+
+        if (!isContainer(entity)) {
+            uint64_t state = hash(getName(entity));
+            if (offset < BOOK_SIZE) {
+                size = std::min(size, BOOK_SIZE - offset);
+                // std::cerr << size << std::endl; TODO не понимаю, почему там такой size выводится
+                for (int i = 0; i < offset; ++i) {
+                    xorshift64(&state);
+                }
+                for (int i = 0; i < size; ++i) {
+                    buf[i] = alphabet[xorshift64(&state) % 28];
+                }
+            } else {
+                size = 0;
+            }
+        }
+    } catch (std::exception &e) {
+        std::cerr << "Something went wrong: " << e.what() << std::endl;
+        return -ENOENT;
+    }
+    return size;
+}
 
 static const struct fuse_operations bablib_oper = {
 	.getattr	= bablib_getattr,
-    .open		= NULL,
-    .read		= NULL,
+    .open		= bablib_open,
+    .read		= bablib_read,
     .readdir	= bablib_readdir,
     .init       = bablib_init,
 };
