@@ -1,51 +1,31 @@
 #define FUSE_USE_VERSION 31
 #include <iostream>
 #include <cstring>
+#include <functional>
 #include <fuse3/fuse.h>
 
 #include "bablib.h"
 
-std::shared_ptr<Library> lib = std::make_shared<Library>(10, 0);
+std::shared_ptr<Library> library;
 
-const char alphabet[28] = {'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','.',','};
-
-uint64_t hash(const std::string &str) {
-    uint64_t hash = 5381;
-    for (char c: str)
-        hash = ((hash << 5) + hash) + c;
-    return hash;
-}
-
-uint64_t xorshift64(uint64_t *state) {
-    if (*state == 0) {
-        *state = 1;
-    }
-
-    uint64_t x = *state;
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    return *state = x;
-}
-
-static void *bablib_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
+void *bablib_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
     std::cerr << "bablib_init" << std::endl;
 	(void) conn;
 	cfg->kernel_cache = 0;
 	return NULL;
 }
 
-static int bablib_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi) {
+int bablib_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi) {
     int res = 0;
     std::cerr << "bablib_getattr path=" << path << std::endl;
 
     memset(stbuf, 0, sizeof(stbuf));
     try {
-        LibraryEntity entity = lib->resolve(path);
+        LibraryEntity entity = library->resolve(path);
         if (isContainer(entity)) {
-            stbuf->st_mode = S_IFDIR | 0555;
+            stbuf->st_mode = S_IFDIR | 0444;
         } else {
-            stbuf->st_mode = S_IFREG | 0555;
+            stbuf->st_mode = S_IFREG | 0444;
             stbuf->st_nlink = 1;
             stbuf->st_size = BOOK_SIZE;
         }
@@ -57,9 +37,9 @@ static int bablib_getattr(const char *path, struct stat *stbuf, struct fuse_file
     return res;
 }
 
-static int bablib_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-                         off_t offset, struct fuse_file_info *fi,
-                         enum fuse_readdir_flags flags)
+int bablib_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+                   off_t offset, struct fuse_file_info *fi,
+                   enum fuse_readdir_flags flags)
 {
     std::cerr << "bablib_readdir path=" << path << std::endl;
     (void) offset;
@@ -68,16 +48,20 @@ static int bablib_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     
     int res = 0;
     try {
-        LibraryEntity resolvedEntity = lib->resolve(path);
+        LibraryEntity resolvedEntity = library->resolve(path);
         if (isContainer(resolvedEntity)) {
             auto contained = getContainedEntities(resolvedEntity);
-            if (std::get_if<Room*>(&resolvedEntity)) {
-                
+            if (std::string(path) != "/" && std::get_if<Room*>(&resolvedEntity)) { // remove previous room to reduce clutter
+                auto prevEnt = library->resolve(removeLastToken(path));
+                if (auto prevRoom = std::get_if<Room*>(&prevEnt)) {
+                    auto iter = std::find(contained.begin(), contained.end(), (*prevRoom)->getName());
+                    if (iter != contained.end())
+                        contained.erase(iter);
+                }
             }
             for (const auto& name : contained)
                 filler(buf, name.c_str(), NULL, 0, fuse_fill_dir_flags(0));
          }
-        
     } catch (std::exception &e) {
         std::cerr << "Something went wrong: " << e.what() << std::endl;
         res = -ENOENT;
@@ -85,16 +69,17 @@ static int bablib_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     return res;
 }
 
-static int bablib_open(const char *path, struct fuse_file_info *fi)
+int bablib_open(const char *path, struct fuse_file_info *fi)
 {
     std::cerr << "bablib_open path=" << path << std::endl;
     try {
-        LibraryEntity entity = lib->resolve(path);
+        LibraryEntity entity = library->resolve(path);
         if (!isContainer(entity)) {
             if ((fi->flags & O_ACCMODE) != O_RDONLY)
                 return -EACCES;
-        } else
+        } else {
             return -EISDIR;
+        }
     } catch (std::exception &e) {
         std::cerr << "Something went wrong: " << e.what() << std::endl;
         return -ENOENT;
@@ -102,25 +87,20 @@ static int bablib_open(const char *path, struct fuse_file_info *fi)
     return 0;
 }
 
-static int bablib_read(const char *path, char *buf, size_t size, off_t offset,
-                      struct fuse_file_info *fi)
+int bablib_read(const char *path, char *buf, size_t size, off_t offset,
+                struct fuse_file_info *fi)
 {
     std::cerr << "bablib_read path=" << path << std::endl;
     (void) fi;
     try {
-        LibraryEntity entity = lib->resolve(path);
+        LibraryEntity entity = library->resolve(path);
 
-        if (!isContainer(entity)) {
-            uint64_t state = hash(getName(entity));
+        if (auto book = std::get_if<Book*>(&entity)) {
+            std::string content = (*book)->getContents();
             if (offset < BOOK_SIZE) {
                 size = std::min(size, BOOK_SIZE - offset);
                 // std::cerr << size << std::endl; TODO не понимаю, почему там такой size выводится
-                for (int i = 0; i < offset; ++i) {
-                    xorshift64(&state);
-                }
-                for (int i = 0; i < size; ++i) {
-                    buf[i] = alphabet[xorshift64(&state) % 28];
-                }
+                memcpy(buf, (char*)content.c_str() + offset, size);
             } else {
                 size = 0;
             }
@@ -132,18 +112,70 @@ static int bablib_read(const char *path, char *buf, size_t size, off_t offset,
     return size;
 }
 
-static const struct fuse_operations bablib_oper = {
-	.getattr	= bablib_getattr,
-    .open		= bablib_open,
-    .read		= bablib_read,
-    .readdir	= bablib_readdir,
-    .init       = bablib_init,
-};
+int bablib_rename(const char *old_path, const char *new_path, unsigned int flags) {
+    std::cerr << "bablib_rename old_path=" << old_path << " new_path=" << new_path << " flags=" << flags << std::endl;
+    (void) flags;
+    std::string oldPath(old_path);
+    std::string newPath(new_path);
+    try {
+        if (oldPath == newPath)
+            return 0;
+        LibraryEntity entity = library->resolve(oldPath);
+        return LibraryEntityVisitor<int>{
+            .roomHandler = [](auto) {
+                std::cerr << "Renaming a room is forbidden!" << std::endl;
+                return -EINVAL;
+            },
+            .bookcaseHandler = [&oldPath, &newPath](auto bookcase) {
+                LibraryEntity parentEntity = library->resolve(removeLastToken(oldPath));
+                LibraryEntity newPathParentEntity;
+                try {
+                    newPathParentEntity = library->resolve(removeLastToken(newPath));
+                } catch (...) {
+                    std::cerr << "Bad new bookcase name!" << std::endl;
+                    return -EINVAL;
+                }
+                if (parentEntity != newPathParentEntity) {
+                    std::cerr << "Bookcase cannot be moved outside the room!" << std::endl;
+                    return -EINVAL;
+                }
+                if (auto room = std::get_if<Room*>(&parentEntity)) {
+                    auto oldName = getLastToken(oldPath);
+                    auto newName = getLastToken(newPath);
+                    try {
+                        (*room)->renameBookcase(oldName, newName);
+                    } catch (std::exception &e) {
+                        std::cerr << "Name conflict: " << e.what() << std::endl;
+                        return -EINVAL;
+                    }
+                } else {
+                    throw BabLibException("unexpected bookcase owner");
+                }
+                return 0;
+            }
+        }.visit(entity);
+    } catch (std::exception &e) {
+        std::cerr << "Something went wrong: " << e.what() << std::endl;
+        return -ENOENT;
+    }
+    return 0;
+}
 
 int main(int argc, char *argv[])
 {
 	int ret;
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+
+    library = std::make_shared<Library>(10, 0);
+
+    const struct fuse_operations bablib_oper = {
+        .getattr	= bablib_getattr,
+        .rename     = bablib_rename,
+        .open		= bablib_open,
+        .read		= bablib_read,
+        .readdir	= bablib_readdir,
+        .init       = bablib_init
+    };
 
 	/* Parse options 
 	if (fuse_opt_parse(&args, &options, option_spec, NULL) == -1)

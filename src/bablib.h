@@ -14,7 +14,7 @@
 #define BOOKCASES_COUNT 4
 #define SHELVES_COUNT 5
 #define BOOKS_COUNT 32
-#define BOOK_SIZE 1048576ul // TODO
+#define BOOK_SIZE (256ul * 4096)
 
 class BabLibException : public std::runtime_error {
 public:
@@ -78,7 +78,7 @@ public:
 
 std::string_view extractFirstToken(std::string_view &path);
 std::string_view removeLastToken(std::string_view path);
-std::string getName(LibraryEntity entity);
+std::string_view getLastToken(std::string_view path);
 
 bool isContainer(LibraryEntity entity);
 std::vector<std::string> getContainedEntities(LibraryEntity entity);
@@ -124,7 +124,7 @@ public:
     Room* nextRoom();
 
     std::array<Bookcase*, BOOKCASES_COUNT> getBookcases();
-    void renameBookcase(const std::string &prevName, const std::string& newName);
+    void renameBookcase(std::string_view prevName, std::string_view newName);
 
 private:
     Library* library_;
@@ -179,13 +179,15 @@ public:
     Book(Book&&) = delete;
 
     std::string getName() const;
+
+    std::string getContents() const;
 private:
     uint64_t id_;
 };
 
-/*
-class Table : public LibraryEntity {};
 
-class Basket : public LibraryEntity {};
-*/
+class Table {};
+
+class Basket {};
+
 #endif

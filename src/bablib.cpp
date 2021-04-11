@@ -52,14 +52,6 @@ std::vector<std::string> getContainedEntities(LibraryEntity entity) {
     }.visit(entity);
 }
 
-std::string getName(LibraryEntity entity) {
-    return LibraryEntityVisitor<std::string>{
-            .bookHandler = [](Book *book) {
-                return book->getName();
-            }
-    }.visit(entity);
-}
-
 std::string_view extractFirstToken(std::string_view &path) {
     auto pos = path.find('/');
     if (pos == std::string::npos) pos = path.length();
@@ -69,10 +61,15 @@ std::string_view extractFirstToken(std::string_view &path) {
 }
 
 std::string_view removeLastToken(std::string_view path) {
-    if (path == "/") return path;
     auto pos = path.rfind('/');
     if (pos == std::string::npos) throw BabLibException("expected path to have at least one /");
-    return path.substr(0, pos);
+    return path.substr(0, pos + 1);
+}
+
+std::string_view getLastToken(std::string_view path) {
+    auto pos = path.rfind('/');
+    if (pos == std::string::npos) throw BabLibException("expected path to have at least one /");
+    return path.substr(pos + 1);
 }
 
 
@@ -173,8 +170,22 @@ std::array<Bookcase*, BOOKCASES_COUNT> Room::getBookcases() {
     return a;
 }
 
-void Room::renameBookcase(const std::string& prevName, const std::string& newName) {
-    throw std::runtime_error("not implemented");
+void Room::renameBookcase(std::string_view prevName, std::string_view newName) {
+    int idx;
+    for (idx = 0; idx < BOOKCASES_COUNT; idx++) {
+        if (bookcases_[idx]->getName() == prevName)
+            break;
+    }
+    if (idx == BOOKCASES_COUNT)
+        throw BabLibException("no bookcase named " + std::string(prevName));
+    // check conflicts
+    if (newName == previousRoom()->getName() || newName == nextRoom()->getName())
+        throw BabLibException("name is taken by a room");
+    for (int i = 0; i < BOOKCASES_COUNT; i++) {
+        if (i != idx && bookcases_[i]->getName() == newName)
+            throw BabLibException("name is taken by a bookcase");
+    }
+    bookcases_[idx]->setName(std::string(newName));
 }
 
 /**
@@ -190,6 +201,10 @@ Bookcase::Bookcase(Room* room, uint64_t id): room_{room}, id_{id} {
 
 std::string Bookcase::getName() const {
     return name_;
+}
+
+void Bookcase::setName(const std::string &name) {
+    name_ = name;
 }
 
 uint64_t Bookcase::getId() const {
@@ -245,4 +260,33 @@ std::string Book::getName() const {
     return "book_" + std::to_string(id_);
 }
 
+static const char alphabet[28] = {'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','.',','};
 
+static uint64_t hash(const std::string &str) {
+    uint64_t hash = 5381;
+    for (char c: str)
+        hash = ((hash << 5) + hash) + c;
+    return hash;
+}
+
+static uint64_t xorshift64(uint64_t *state) {
+    if (*state == 0) {
+        *state = 1;
+    }
+
+    uint64_t x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    return *state = x;
+}
+
+std::string Book::getContents() const {
+    uint64_t state = hash(std::to_string(id_));
+    std::string content;
+    content.reserve(BOOK_SIZE);
+    for (int i = 0; i < BOOK_SIZE; ++i) {
+        content.push_back(alphabet[xorshift64(&state) % 28]);
+    }
+    return content;
+}
