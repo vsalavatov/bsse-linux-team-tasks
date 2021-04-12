@@ -94,17 +94,33 @@ int bablib_read(const char *path, char *buf, size_t size, off_t offset,
     (void) fi;
     try {
         LibraryEntity entity = library->resolve(path);
-
-        if (auto book = std::get_if<Book*>(&entity)) {
-            std::string content = (*book)->getContents();
+        auto cantRead = [&](std::string kind) -> auto {
+            return [&, kind](auto) {
+                std::cerr << "Cannot read " << kind << "!" << std::endl;
+                size = 0;
+            };
+        };
+        auto doRead = [&](std::string content) -> auto {
             if (offset < BOOK_SIZE) {
                 size = std::min(size, BOOK_SIZE - offset);
-                // std::cerr << size << std::endl; TODO не понимаю, почему там такой size выводится
                 memcpy(buf, (char*)content.c_str() + offset, size);
             } else {
                 size = 0;
             }
-        }
+        };
+        LibraryEntityVisitor<void>{
+            .roomHandler = cantRead("room"),
+            .bookcaseHandler = cantRead("bookcase"),
+            .shelfHandler = cantRead("shelf"),
+            .bookHandler = [&](auto book) {
+                doRead(book->getContent());
+            },
+            .tableHandler = cantRead("table"),
+            .basketHandler = cantRead("basket"),
+            .noteHandler = [&](auto note) {
+                doRead(note->getContent());
+            }
+        }.visit(entity);
     } catch (std::exception &e) {
         std::cerr << "Something went wrong: " << e.what() << std::endl;
         return -ENOENT;
@@ -121,37 +137,109 @@ int bablib_rename(const char *old_path, const char *new_path, unsigned int flags
         if (oldPath == newPath)
             return 0;
         LibraryEntity entity = library->resolve(oldPath);
+        auto assertSameContainer = [&oldPath, &newPath](auto f) -> auto {
+            LibraryEntity parentEntity = library->resolve(removeLastToken(oldPath));
+            LibraryEntity newPathParentEntity;
+            try {
+                newPathParentEntity = library->resolve(removeLastToken(newPath));
+            } catch (...) {
+                std::cerr << "Bad new name!" << std::endl;
+                return -EINVAL;
+            }
+            if (parentEntity != newPathParentEntity) {
+                std::cerr << "Entity cannot be moved outside the container!" << std::endl;
+                return -EINVAL;
+            }
+            return f(getLastToken(oldPath), getLastToken(newPath), parentEntity);
+        };
+
         return LibraryEntityVisitor<int>{
             .roomHandler = [](auto) {
                 std::cerr << "Renaming a room is forbidden!" << std::endl;
                 return -EINVAL;
             },
-            .bookcaseHandler = [&oldPath, &newPath](auto bookcase) {
+            .bookcaseHandler = [&assertSameContainer](auto bookcase) {
+                return assertSameContainer([](auto oldName, auto newName, LibraryEntity parent) {
+                    if (auto room = std::get_if<Room*>(&parent)) {
+                        try {
+                            (*room)->renameBookcase(oldName, newName);
+                        } catch (std::exception &e) {
+                            std::cerr << "Name conflict: " << e.what() << std::endl;
+                            return -EINVAL;
+                        }
+                    } else {
+                        throw BabLibException("unexpected bookcase owner");
+                    }
+                    return 0;
+                });
+            },
+            .shelfHandler = [&assertSameContainer](auto shelf) {
+                return assertSameContainer([](auto oldName, auto newName, LibraryEntity parent) {
+                    if (auto bookcase = std::get_if<Bookcase*>(&parent)) {
+                        try {
+                            (*bookcase)->renameShelf(oldName, newName);
+                        } catch (std::exception &e) {
+                            std::cerr << "Name conflict: " << e.what() << std::endl;
+                            return -EINVAL;
+                        }
+                    } else {
+                        throw BabLibException("unexpected shelf owner");
+                    }
+                    return 0;
+                });
+            },
+            .bookHandler = [](auto book) {
+                throw BabLibException("not implemented");
+                return 0;
+            },
+            .tableHandler = [](auto table) {
+                std::cerr << "Renaming a table is forbidden!" << std::endl;
+                return -EINVAL;
+            },
+            .basketHandler = [&assertSameContainer](auto basket) {
+                return assertSameContainer([](auto oldName, auto newName, LibraryEntity parent) {
+                    if (auto table = std::get_if<Table*>(&parent)) {
+                        try {
+                            (*table)->renameBasket(oldName, newName);
+                        } catch (std::exception &e) {
+                            std::cerr << "Name conflict: " << e.what() << std::endl;
+                            return -EINVAL;
+                        }
+                    } else {
+                        throw BabLibException("unexpected basket owner");
+                    }
+                    return 0;
+                });
+            },
+            .noteHandler = [&oldPath, &newPath](auto note) {
                 LibraryEntity parentEntity = library->resolve(removeLastToken(oldPath));
                 LibraryEntity newPathParentEntity;
                 try {
                     newPathParentEntity = library->resolve(removeLastToken(newPath));
                 } catch (...) {
-                    std::cerr << "Bad new bookcase name!" << std::endl;
+                    std::cerr << "Bad new name!" << std::endl;
                     return -EINVAL;
                 }
-                if (parentEntity != newPathParentEntity) {
-                    std::cerr << "Bookcase cannot be moved outside the room!" << std::endl;
-                    return -EINVAL;
-                }
-                if (auto room = std::get_if<Room*>(&parentEntity)) {
-                    auto oldName = getLastToken(oldPath);
-                    auto newName = getLastToken(newPath);
-                    try {
-                        (*room)->renameBookcase(oldName, newName);
-                    } catch (std::exception &e) {
-                        std::cerr << "Name conflict: " << e.what() << std::endl;
-                        return -EINVAL;
+                if (parentEntity == newPathParentEntity) {
+                    if (auto table = std::get_if<Table*>(&parentEntity)) {
+                        try {
+                            (*table)->renameNote(getLastToken(oldPath), getLastToken(newPath));
+                        } catch (std::exception &e) {
+                            std::cerr << "Name conflict: " << e.what() << std::endl;
+                        }
+                    } else if (auto basket = std::get_if<Basket*>(&parentEntity)) {
+                        try {
+                            (*basket)->renameNote(getLastToken(oldPath), getLastToken(newPath));
+                        } catch (std::exception &e) {
+                            std::cerr << "Name conflict: " << e.what() << std::endl;
+                        }
+                    } else {
+                        throw BabLibException("unexpected note owner");
                     }
+                    return 0;
                 } else {
-                    throw BabLibException("unexpected bookcase owner");
+                    return -EINVAL;
                 }
-                return 0;
             }
         }.visit(entity);
     } catch (std::exception &e) {
