@@ -1,8 +1,14 @@
+/***
+ * ДИСКЛЕЙМЕР:
+ * ПРОСМОТР ДАННОГО КОДА МОЖЕТ НАНЕСТИ НЕПОПРАВИМЫЙ ВРЕД ВАШЕМУ ЗДОРОВЬЮ
+ */
+
 #include "bablib.h"
 
 #include <algorithm>
 #include <ranges>
 #include <stdexcept>
+#include <iostream>
 
 BabLibException::BabLibException(const std::string &msg) : std::runtime_error(msg) {}
 
@@ -57,20 +63,10 @@ std::vector<std::string> getContainedEntities(LibraryEntity entity) {
             return std::vector<std::string>{};
         },
         .tableHandler = [](Table *table) {
-            std::vector<std::string> names;
-            for (const auto &basket : table->getBaskets())
-                names.push_back(basket->getName());
-            for (const auto &note : table->getNotes())
-                names.push_back(note->getName());
-            for (const auto &book : table->getBooks())
-                names.push_back(book->getName());
-            return names;
+            return table->getContainedEntitiesNames();
         },
         .basketHandler = [](Basket* basket) {
-            std::vector<std::string> names;
-            for (const auto &note : basket->getNotes())
-                names.push_back(note->getName());
-            return names;
+            return basket->getContainedEntitiesNames();
         },
         .noteHandler = [](auto) {
             throw BabLibException("Unexpected call: getContainedEntities(note)");
@@ -122,6 +118,7 @@ LibraryEntity Library::resolve(std::string_view path) {
         .roomHandler = [&path](Room* room) -> LibraryEntity {
             if (path.length() == 0) return room;
             auto firstName = extractFirstToken(path);
+            if (firstName == room->getTable()->getName()) return room->getTable();
             if (firstName == room->previousRoom()->getName()) return room->previousRoom();
             if (firstName == room->nextRoom()->getName()) return room->nextRoom();
             for (auto bc : room->getBookcases()) {
@@ -449,7 +446,7 @@ void NoteContainer::createNote(std::string_view name) {
     auto contained = this->getContainedEntitiesNames();
     if (std::ranges::find(contained, name) != contained.end())
         throw BabLibException("name is already taken");
-    notes_.emplace_back(std::make_unique<Note>(std::string(name)));
+    notes_.emplace_back(std::make_unique<Note>(this, std::string(name)));
 }
 void NoteContainer::renameNote(std::string_view oldName, std::string_view newName) {
     if (oldName == newName) return;
@@ -512,11 +509,30 @@ std::vector<Book*> Table::getBooks() {
     return books_;
 }
 
+void Table::addBook(Book* b) {
+    books_.push_back(b);
+}
+
+void Table::removeBook(std::string_view name) {
+    for (std::size_t i = 0; i < books_.size(); i++) {
+        if (books_[i]->getName() == name) {
+            std::swap(books_[i], books_.back());
+            books_.pop_back();
+            return;
+        }
+    }
+    throw BabLibException("no book named " + std::string(name) + " found");
+}
+
 /**
  * Basket
  */
 
 Basket::Basket(Table* table, std::string name): table_{table}, name_{name} {}
+
+Table* Basket::getOwnerTable() const {
+    return table_;
+}
 
 std::string Basket::getName() const {
     return name_;
@@ -530,7 +546,12 @@ void Basket::setName(const std::string &newName) {
  * Note
  */
 
-Note::Note(std::string name): name_{name} {}
+Note::Note(NoteContainer *container, std::string name): container_{container}, name_{name} {
+}
+
+NoteContainer* Note::getOwner() const {
+    return container_;
+}
 
 std::string Note::getName() const {
     return name_;

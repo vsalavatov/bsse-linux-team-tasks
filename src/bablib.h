@@ -1,6 +1,11 @@
 #ifndef BABLIB_H
 #define BABLIB_H
 
+/***
+ * ДИСКЛЕЙМЕР:
+ * ПРОСМОТР ДАННОГО КОДА МОЖЕТ НАНЕСТИ НЕПОПРАВИМЫЙ ВРЕД ВАШЕМУ ЗДОРОВЬЮ
+ */
+
 #include <memory>
 #include <string>
 #include <variant>
@@ -254,12 +259,11 @@ public:
     virtual std::vector<std::string> getContainedEntitiesNames() override;
 
     std::vector<Book*> getBooks();
-
+    void addBook(Book*);
+    void removeBook(std::string_view name);
 private:
     Room* room_;
     std::string name_;
-    std::vector<std::unique_ptr<Basket>> baskets_;
-    std::vector<std::unique_ptr<Note>> notes_;
     std::vector<Book*> books_;
 };
 
@@ -271,6 +275,7 @@ public:
 
     std::string getName() const;
     void setName(const std::string &newName);
+    Table* getOwnerTable() const;
 private:
     Table *table_;
     std::string name_;
@@ -278,7 +283,7 @@ private:
 
 class Note {
 public:
-    explicit Note(std::string name);
+    Note(NoteContainer *container, std::string name);
     Note(const Note&) = delete;
     Note(Note&&) = delete;    
 
@@ -287,7 +292,10 @@ public:
 
     std::string getContent() const;
     void setContent(const std::string &c);
+    void setOwner(NoteContainer *newOwner);
+    NoteContainer *getOwner() const; 
 private:
+    NoteContainer *container_;
     std::string name_;
     std::string content_;
 };

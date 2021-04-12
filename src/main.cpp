@@ -1,3 +1,8 @@
+/***
+ * ДИСКЛЕЙМЕР:
+ * ПРОСМОТР ДАННОГО КОДА МОЖЕТ НАНЕСТИ НЕПОПРАВИМЫЙ ВРЕД ВАШЕМУ ЗДОРОВЬЮ
+ */
+
 #define FUSE_USE_VERSION 31
 #include <iostream>
 #include <cstring>
@@ -22,13 +27,28 @@ int bablib_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *
     memset(stbuf, 0, sizeof(stbuf));
     try {
         LibraryEntity entity = library->resolve(path);
-        if (isContainer(entity)) {
+        auto containerHandler = [&](auto) {
             stbuf->st_mode = S_IFDIR | 0444;
-        } else {
+        };
+        auto bookHandler = [&](auto) {
             stbuf->st_mode = S_IFREG | 0444;
             stbuf->st_nlink = 1;
             stbuf->st_size = BOOK_SIZE;
-        }
+        };
+        auto noteHandler = [&](Note *note) {
+            stbuf->st_mode = S_IFREG | 0666;
+            stbuf->st_nlink = 1;
+            stbuf->st_size = note->getContent().size();
+        };
+        LibraryEntityVisitor<void>{
+            .roomHandler = containerHandler,
+            .bookcaseHandler = containerHandler,
+            .shelfHandler = containerHandler,
+            .bookHandler = bookHandler,
+            .tableHandler = containerHandler,
+            .basketHandler = containerHandler,
+            .noteHandler = noteHandler
+        }.visit(entity);
     } catch (std::exception &e) {
         std::cerr << "Something went wrong: " << e.what() << std::endl;
         res = -ENOENT;
@@ -59,8 +79,9 @@ int bablib_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
                         contained.erase(iter);
                 }
             }
-            for (const auto& name : contained)
+            for (const auto& name : contained) {
                 filler(buf, name.c_str(), NULL, 0, fuse_fill_dir_flags(0));
+            }
          }
     } catch (std::exception &e) {
         std::cerr << "Something went wrong: " << e.what() << std::endl;
@@ -101,8 +122,8 @@ int bablib_read(const char *path, char *buf, size_t size, off_t offset,
             };
         };
         auto doRead = [&](std::string content) -> auto {
-            if (offset < BOOK_SIZE) {
-                size = std::min(size, BOOK_SIZE - offset);
+            if (offset < content.length()) {
+                size = std::min(size, content.length() - offset);
                 memcpy(buf, (char*)content.c_str() + offset, size);
             } else {
                 size = 0;
@@ -188,8 +209,55 @@ int bablib_rename(const char *old_path, const char *new_path, unsigned int flags
                     return 0;
                 });
             },
-            .bookHandler = [](auto book) {
-                throw BabLibException("not implemented");
+            .bookHandler = [&oldPath, &newPath](Book* book) {
+                LibraryEntity parentEntity = library->resolve(removeLastToken(oldPath));
+                LibraryEntity newPathParentEntity;
+                try {
+                    newPathParentEntity = library->resolve(removeLastToken(newPath));
+                } catch (...) {
+                    std::cerr << "Bad new name!" << std::endl;
+                    return -EINVAL;
+                }
+                if (!std::holds_alternative<Table*>(newPathParentEntity) && !std::holds_alternative<Shelf*>(newPathParentEntity)) {
+                    std::cerr << "Cannot move book there!" << std::endl;
+                    return -EINVAL;
+                }
+                auto oldName = getLastToken(oldPath);
+                auto newName = getLastToken(newPath);
+                if (oldName != newName) {
+                    std::cerr << "Book renaming is forbidden!" << std::endl;
+                    return -EINVAL;
+                }
+                if (parentEntity == newPathParentEntity) {
+                    return 0;
+                } else {
+                    try {
+                        auto newParentContained = getContainedEntities(newPathParentEntity);
+                        if (std::find(newParentContained.begin(), newParentContained.end(), std::string(newName)) != newParentContained.end())
+                            throw BabLibException("name is already taken");
+                        LibraryEntityVisitor<void>{
+                            .shelfHandler = [&](Shelf* s) {
+                                if (book->getOrigin() != s)
+                                    throw BabLibException("cannot move book to a shelf it wasn't originated from");
+                            },
+                            .tableHandler = [&](Table* t) {
+                                t->addBook(book);
+                            },
+                        }.visit(newPathParentEntity);
+                        LibraryEntityVisitor<void>{
+                            .shelfHandler = [&](Shelf* s) {
+                            },
+                            .tableHandler = [&](Table* t) {
+                                t->removeBook(book->getName());
+                            },
+                        }.visit(parentEntity);
+                        book->setOwner(newPathParentEntity);                        
+                    } catch (std::exception &e) {
+                        std::cerr << "Incorrect move op: " << e.what() << std::endl;
+                        return -EINVAL;
+                    }
+                    return 0;
+                }
                 return 0;
             },
             .tableHandler = [](auto table) {
@@ -211,7 +279,7 @@ int bablib_rename(const char *old_path, const char *new_path, unsigned int flags
                     return 0;
                 });
             },
-            .noteHandler = [&oldPath, &newPath](auto note) {
+            .noteHandler = [&oldPath, &newPath](Note* note) {
                 LibraryEntity parentEntity = library->resolve(removeLastToken(oldPath));
                 LibraryEntity newPathParentEntity;
                 try {
@@ -220,25 +288,53 @@ int bablib_rename(const char *old_path, const char *new_path, unsigned int flags
                     std::cerr << "Bad new name!" << std::endl;
                     return -EINVAL;
                 }
+                if (!std::holds_alternative<Table*>(newPathParentEntity) && !std::holds_alternative<Basket*>(newPathParentEntity)) {
+                    std::cerr << "Cannot move note there!" << std::endl;
+                    return -EINVAL;
+                }
                 if (parentEntity == newPathParentEntity) {
+                    auto renamer = [&](auto ent) {
+                        try {
+                            (*ent)->renameNote(getLastToken(oldPath), getLastToken(newPath));
+                        } catch (std::exception &e) {
+                            std::cerr << "Name conflict: " << e.what() << std::endl;
+                        }
+                    };
                     if (auto table = std::get_if<Table*>(&parentEntity)) {
-                        try {
-                            (*table)->renameNote(getLastToken(oldPath), getLastToken(newPath));
-                        } catch (std::exception &e) {
-                            std::cerr << "Name conflict: " << e.what() << std::endl;
-                        }
+                        renamer(table);
                     } else if (auto basket = std::get_if<Basket*>(&parentEntity)) {
-                        try {
-                            (*basket)->renameNote(getLastToken(oldPath), getLastToken(newPath));
-                        } catch (std::exception &e) {
-                            std::cerr << "Name conflict: " << e.what() << std::endl;
-                        }
+                        renamer(basket);
                     } else {
                         throw BabLibException("unexpected note owner");
                     }
                     return 0;
                 } else {
-                    return -EINVAL;
+                    try {
+                        auto oldName = getLastToken(oldPath);
+                        auto newName = getLastToken(newPath);
+                        auto newParentContained = getContainedEntities(newPathParentEntity);
+                        if (std::find(newParentContained.begin(), newParentContained.end(), std::string(newName)) != newParentContained.end())
+                            throw BabLibException("name is already taken");
+                        auto adder = [&](auto ent) {
+                            ent->createNote(newName);
+                            ent->getNotes().back()->setContent(note->getContent());
+                        };
+                        auto deleter = [&](auto ent) {
+                            ent->deleteNote(oldName);
+                        };
+                        LibraryEntityVisitor<void>{
+                            .tableHandler = adder,
+                            .basketHandler = adder
+                        }.visit(newPathParentEntity);
+                        LibraryEntityVisitor<void>{
+                            .tableHandler = deleter,
+                            .basketHandler = deleter
+                        }.visit(parentEntity);
+                    } catch (std::exception &e) {
+                        std::cerr << "Incorrect move op: " << e.what() << std::endl;
+                        return -EINVAL;
+                    }
+                    return 0;
                 }
             }
         }.visit(entity);
@@ -247,6 +343,192 @@ int bablib_rename(const char *old_path, const char *new_path, unsigned int flags
         return -ENOENT;
     }
     return 0;
+}
+
+int bablib_unlink(const char *path) {
+    std::cerr << "bablib_unlink path=" << path << std::endl;
+    try {
+        LibraryEntity entity = library->resolve(path);
+        auto cantDelete = [&](std::string kind) {
+            return [&, kind](auto) {
+                std::cerr << "Cannot delete " << kind << "!" << std::endl;
+                if (isContainer(entity))
+                    return -EISDIR;
+                else
+                    return -EACCES;
+            };
+        };
+        return LibraryEntityVisitor<int> {
+                .roomHandler = cantDelete("room"),
+                .bookcaseHandler = cantDelete("bookcase"),
+                .shelfHandler = cantDelete("shelf"),
+                .bookHandler = cantDelete("book"),
+                .tableHandler = cantDelete("table"),
+                .basketHandler = cantDelete("basket"),
+                .noteHandler = [&](auto note) {
+                    NoteContainer *owner = note->getOwner();
+                    owner->deleteNote(note->getName());
+                    return 0;
+                }
+        }.visit(entity);
+    } catch (std::exception &e) {
+        std::cerr << "Something went wrong: " << e.what() << std::endl;
+        return -ENOENT;
+    }
+}
+
+int bablib_rmdir(const char *path) {
+    std::cerr << "bablib_unlink path=" << path << std::endl;
+    try {
+        LibraryEntity entity = library->resolve(path);
+        auto cantDelete = [&](std::string kind)  {
+            return [&, kind](auto) {
+                std::cerr << "Cannot delete " << kind << "!" << std::endl;
+                if (!isContainer(entity))
+                    return -ENOTDIR;
+                else
+                    return -EACCES;
+            };
+        };
+        return LibraryEntityVisitor<int> {
+                .roomHandler = cantDelete("room"),
+                .bookcaseHandler = cantDelete("bookcase"),
+                .shelfHandler = cantDelete("shelf"),
+                .bookHandler = cantDelete("book"),
+                .tableHandler = cantDelete("table"),
+                .basketHandler = [&](auto basket) {
+                    Table *table = basket->getOwnerTable();
+                    table->deleteBasket(basket->getName());
+                    return 0;
+                },
+                .noteHandler = cantDelete("note")
+        }.visit(entity);
+    } catch (std::exception &e) {
+        std::cerr << "Something went wrong: " << e.what() << std::endl;
+        return -ENOENT;
+    }
+}
+
+int bablib_mkdir(const char * path, mode_t) {
+    std::cerr << "bablib_mkdir path=" << path << std::endl;
+    try {
+        auto parent = library->resolve(removeLastToken(std::string(path)));
+        auto name = getLastToken(std::string(path));
+        if (auto table = std::get_if<Table*>(&parent)) {
+            auto contained = getContainedEntities(*table);
+            if (std::find(contained.begin(), contained.end(), name) != contained.end()) {
+                std::cerr << "name is already taken" << std::endl;
+                return -EINVAL;
+            }
+            (*table)->createBasket(name);
+        } else {
+            std::cerr << "You may only create baskets inside a table" << std::endl;
+            return -EINVAL;
+        }
+    } catch (std::exception &e) {
+        std::cerr << "Something went wrong: " << e.what() << std::endl;
+        return -ENOENT;
+    }
+    return 0;
+}
+
+int bablib_create(const char *path, mode_t, struct fuse_file_info *) {
+    std::cerr << "bablib_create path=" << path << std::endl;
+    try {
+        auto spath = std::string(path);
+        auto parent = library->resolve(removeLastToken(spath));
+        auto name = getLastToken(spath);
+        auto creator = [&](auto noteContainer) -> int {
+            auto contained = getContainedEntities(*noteContainer);
+            if (std::find(contained.begin(), contained.end(), name) != contained.end()) {
+                std::cerr << "name is already taken" << std::endl;
+                return -EINVAL;
+            }
+            (*noteContainer)->createNote(name);
+            return 0;
+        };
+        if (auto table = std::get_if<Table*>(&parent)) {
+            return creator(table);
+        } else if (auto basket = std::get_if<Basket*>(&parent)) {
+            return creator(basket);
+        } else {
+            std::cerr << "You may only create baskets inside a table" << std::endl;
+            return -EINVAL;
+        }
+    } catch (std::exception &e) {
+        std::cerr << "Something went wrong: " << e.what() << std::endl;
+        return -ENOENT;
+    }
+    return 0;
+}
+
+int bablib_write(const char *path, const char *buf, size_t size, off_t offset,
+		      struct fuse_file_info *) {
+    std::cerr << "bablib_write path=" << path << std::endl;
+    try {
+        LibraryEntity entity = library->resolve(path);
+        auto cantWrite = [&](std::string kind) -> auto {
+            return [&, kind](auto) {
+                std::cerr << "Cannot write " << kind << "!" << std::endl;
+                size = 0;
+            };
+        };
+        LibraryEntityVisitor<void>{
+            .roomHandler = cantWrite("room"),
+            .bookcaseHandler = cantWrite("bookcase"),
+            .shelfHandler = cantWrite("shelf"),
+            .bookHandler = cantWrite("book"),
+            .tableHandler = cantWrite("table"),
+            .basketHandler = cantWrite("basket"),
+            .noteHandler = [&](Note *note) -> auto {
+                auto content = note->getContent();
+                if (content.size() < offset + size)
+                    content.resize(size + offset);
+                for (size_t i = 0; i < size; ++i)
+                    content[offset + i] = buf[i];
+                note->setContent(content);
+            },
+        }.visit(entity);
+    } catch (std::exception &e) {
+        std::cerr << "Something went wrong: " << e.what() << std::endl;
+        return -ENOENT;
+    }
+    return size;
+}
+
+int bablib_truncate(const char *path, off_t offset, struct fuse_file_info *fi) {
+    std::cerr << "bablib_truncate path=" << path << std::endl;
+    try {
+        LibraryEntity entity = library->resolve(path);
+        auto cantTruncate = [&](std::string kind)  {
+            return [&, kind](auto) {
+                std::cerr << "Cannot truncate " << kind << "!" << std::endl;
+                if (isContainer(entity))
+                    return -EISDIR;
+                else
+                    return -EACCES;
+            };
+        };
+        LibraryEntityVisitor<void> {
+                .roomHandler = cantTruncate("room"),
+                .bookcaseHandler = cantTruncate("bookcase"),
+                .shelfHandler = cantTruncate("shelf"),
+                .bookHandler = cantTruncate("book"),
+                .tableHandler = cantTruncate("table"),
+                .basketHandler = cantTruncate("basket"),
+                .noteHandler = [&](Note* note) {
+                    if (offset < note->getContent().length()) {
+                        std::string oldContent = note->getContent();
+                        note->setContent(oldContent.substr(0, offset));
+                    }
+                }
+        }.visit(entity);
+    } catch (std::exception &e) {
+        std::cerr << "Something went wrong: " << e.what() << std::endl;
+        return -ENOENT;
+    }
+    return 0;   
+    
 }
 
 int main(int argc, char *argv[])
@@ -258,11 +540,17 @@ int main(int argc, char *argv[])
 
     const struct fuse_operations bablib_oper = {
         .getattr	= bablib_getattr,
+        .mkdir      = bablib_mkdir,
+        .unlink     = bablib_unlink,
+        .rmdir      = bablib_rmdir,
         .rename     = bablib_rename,
-        .open		= bablib_open,
+        .truncate   = bablib_truncate,
+        // .open		= bablib_open,
         .read		= bablib_read,
+        .write      = bablib_write,
         .readdir	= bablib_readdir,
-        .init       = bablib_init
+        .init       = bablib_init,
+        .create     = bablib_create,
     };
 
 	/* Parse options 
