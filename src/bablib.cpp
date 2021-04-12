@@ -86,7 +86,7 @@ std::string_view extractFirstToken(std::string_view &path) {
 std::string_view removeLastToken(std::string_view path) {
     auto pos = path.rfind('/');
     if (pos == std::string::npos) throw BabLibException("expected path to have at least one /");
-    return path.substr(0, pos + 1);
+    return (pos == 0 ? path.substr(0, 1) : path.substr(0, pos));
 }
 
 std::string_view getLastToken(std::string_view path) {
@@ -164,7 +164,7 @@ LibraryEntity Library::resolve(std::string_view path) {
                 if (book->getName() == firstName)
                     return book;
             }
-            throw BabLibException("no such book");
+            throw BabLibException("no such book or note or basket");
         },
         .basketHandler = [&path](Basket* basket) -> LibraryEntity {
             if (path.length() == 0) return basket;

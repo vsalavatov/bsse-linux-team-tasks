@@ -412,8 +412,10 @@ int bablib_rmdir(const char *path) {
 int bablib_mkdir(const char * path, mode_t) {
     std::cerr << "bablib_mkdir path=" << path << std::endl;
     try {
-        auto parent = library->resolve(removeLastToken(std::string(path)));
-        auto name = getLastToken(std::string(path));
+        auto spath = std::string(path);
+        auto parent = library->resolve(removeLastToken(spath));
+        std::cerr << spath << ' ' << removeLastToken(spath) << ' ' << getLastToken(spath) << '\n';
+        auto name = getLastToken(spath);
         if (auto table = std::get_if<Table*>(&parent)) {
             auto contained = getContainedEntities(*table);
             if (std::find(contained.begin(), contained.end(), name) != contained.end()) {
