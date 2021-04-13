@@ -1,5 +1,6 @@
 import unittest
 import os
+import stat
 
 current_directory = ""
 
@@ -129,7 +130,7 @@ class TestBablib(unittest.TestCase):
         ls_after = self.get_ls_output()
         self.assertEqual(ls_before, ls_after)
         
-    def test_book_moving_to_desk_only(self):
+    def test_book_moving_to_desk_and_back_only(self):
         shelf = 'bookcase_0/shelf_0'
         ls_before = self.get_ls_output(shelf)
         self.move(f'{shelf}/book_0', 'bookcase_0')
@@ -138,6 +139,37 @@ class TestBablib(unittest.TestCase):
         self.assertSetEqual(ls_before, ls_after)
         self.assertSetEqual(self.get_ls_output('desk'), {'book_0'})
         self.move('desk/book_0', shelf)
+        ls_after = self.get_ls_output(shelf)
+        self.assertSetEqual(ls_before, ls_after)
+    
+    def test_book_contents_constant(self):
+        book = 'bookcase_0/shelf_0/book_20'
+        with open(book, 'rb') as f:
+            contents_before = f.read()
+        for i in range(10):
+            os.chdir(f'room_{(i + 1) % 10}')
+        with open(book, 'rb') as f:
+            contents_after = f.read()
+        self.assertEqual(contents_before, contents_after)
+
+    def test_book_read_only(self):
+        book = 'bookcase_0/shelf_0/book_20'
+        st = os.stat(book)
+        self.assertEqual(st.st_mode, 0o444 | stat.S_IFREG)
+
+    def test_faking_books_forbidden(self):
+        shelf = 'bookcase_0/shelf_0'
+        book = shelf + '/book_22'
+        self.move(book, 'desk')
+        os.mkdir('desk/fake')
+        os.chdir('desk/fake')
+        with open('book_22', 'w') as f:
+            print('fake book', file=f)
+        os.chdir('../..')
+        self.move('desk/fake/book_22', shelf)
+        self.assertNotIn('book_22', self.get_ls_output(shelf))
+        self.move('desk/book_22', shelf)
+        self.assertIn('book_22', self.get_ls_output(shelf))
 
 if __name__ == '__main__':
     current_directory = os.getcwd()

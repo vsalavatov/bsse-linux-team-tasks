@@ -12,3 +12,8 @@ $ mkdir build && cd build && cmake .. && make
 $ mkdir tmp
 $ build/bablib -f tmp/
 ```
+
+* Tests:
+```bash
+$ ./script.sh
+```
