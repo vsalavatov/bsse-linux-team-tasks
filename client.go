@@ -2,18 +2,51 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
 )
 
-func main() {
-	conn, err := openConnection(CLIENT, "")
-	if err != nil {
-		panic(err)
-	}
+const USAGE = `usage:  command [argument]
 
+commands:
+	kill <id>
+	new [<id>]
+	list
+	attach <id>`
+
+type Client struct {
+	conn *net.TCPConn
+}
+
+func parseArguments(args []string) (Message, error) {
+	var command Command
+	arg := ""
+
+	switch args[0] {
+	case "list":
+		command = LIST
+	case "new":
+		command = NEW
+		if len(args) > 1 {
+			arg = args[1]
+		}
+	case "attach":
+		command = ATTACH
+		arg = args[1] // TODO if len(argv) < 3 ...
+	case "kill":
+		command = KILL
+		arg = args[1] // TODO if len(argv) < 3 ...
+	default:
+		return Message{}, errors.New(USAGE)
+	}
+	return Message{CLIENT, command, arg, SUCCESS}, nil
+}
+
+func (c *Client) Do(args []string) {
 	sigs := make(chan os.Signal, 1)
 	end := make(chan bool, 1)
 
@@ -24,47 +57,27 @@ func main() {
 		end <- true
 	}()
 
-	isAttached := AtomBool{0}
-
 	go func() {
+		msg, err := parseArguments(args)
+		if err != nil {
+			fmt.Println(err)
+			end <- true
+			return
+		}
+		err = sendMessage(msg, c.conn)
+		if err != nil {
+			fmt.Println("Failed to send data:", err)
+			end <- true
+			return
+		}
 		reader := bufio.NewReader(os.Stdin)
 		for {
 			s, err := reader.ReadString('\n')
 			if err != nil {
-				_ = conn.CloseWrite()
+				_ = c.conn.CloseWrite()
 				break
 			}
-
-			var c Command
-			arg := ""
-
-			if isAttached.Get() {
-				c = SHELL
-				arg = s
-			} else {
-				argv := processArguments(s)
-				if len(argv) < 2 || argv[0] != "my_screen" {
-					continue
-				}
-				switch argv[1] {
-				case "list":
-					c = LIST
-				case "new":
-					c = NEW
-					if len(argv) > 2 {
-						arg = argv[2]
-					}
-				case "attach":
-					c = ATTACH
-					arg = argv[2] // TODO if len(argv) < 3 ...
-				case "kill":
-					c = KILL
-					arg = argv[2] // TODO if len(argv) < 3 ...
-				default:
-					continue
-				}
-			}
-			err = sendMessage(Message{CLIENT, c, arg}, conn)
+			err = sendMessage(Message{CLIENT, SHELL, s, SUCCESS}, c.conn)
 			if err != nil {
 				fmt.Println("Failed to send data:", err)
 				break
@@ -73,8 +86,19 @@ func main() {
 	}()
 
 	go func() {
+		msg, err := receiveMessage(c.conn)
+		if err != nil {
+			fmt.Println("Failed to send data:", err)
+			end <- true
+			return
+		}
+		if msg.Status == FAILURE {
+			fmt.Println(msg.Argument)
+			end <- true
+			return
+		}
 		for {
-			msg, err := receiveMessage(conn)
+			msg, err := receiveMessage(c.conn)
 			if err != nil {
 				break
 			}
@@ -82,21 +106,36 @@ func main() {
 				fmt.Println("sender is not server")
 				continue
 			}
-			switch msg.Command {
-			case SHELL:
+
+			if msg.Command == SHELL {
 				if _, err := os.Stdout.Write([]byte(msg.Argument)); err != nil {
 					break
 				}
-			// server sends message if command is successfully executed
-			case NEW, ATTACH:
-				isAttached.Set(true)
-			case DETACH:
-				isAttached.Set(false)
 			}
 		}
 	}()
 
 	<-end
+	err := sendMessage(Message{CLIENT, DETACH, "", SUCCESS}, c.conn)
+	if err != nil {
+		fmt.Println("Failed to send data:", err)
+	}
 	fmt.Println()
 	fmt.Println("exiting")
+
+}
+func main() {
+	args := os.Args[1:]
+	if len(args) < 1 {
+		fmt.Println(USAGE)
+		return
+	}
+
+	conn, err := openConnection(CLIENT, "")
+	if err != nil {
+		panic(err)
+	}
+
+	c := Client{conn: conn}
+	c.Do(args)
 }

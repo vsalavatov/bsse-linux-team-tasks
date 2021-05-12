@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/gob"
 	"net"
-	"regexp"
 	"sync/atomic"
 )
 
@@ -25,10 +24,17 @@ const (
 	KILL
 )
 
+type Status bool
+const (
+	FAILURE Status = false
+	SUCCESS = true
+)
+
 type Message struct {
 	Sender Sender
 	Command Command
 	Argument string
+	Status Status
 }
 
 type AtomBool struct {flag int32}
@@ -57,20 +63,10 @@ func receiveMessage(conn *net.TCPConn) (Message, error) {
 	return msg, err
 }
 
-func processArguments(s string) []string {
-	var argv []string
-	for _, v := range regexp.MustCompile(`[\s\n]+`).Split(s, -1) {
-		if len(v) != 0 {
-			argv = append(argv, v)
-		}
-	}
-	return argv
-}
-
 func openConnection(s Sender, arg string) (*net.TCPConn, error) {
 	conn, err := net.DialTCP("tcp", &net.TCPAddr{}, &net.TCPAddr{Port: 8998})
 	if err != nil {
 		return nil, err
 	}
-	return conn, sendMessage(Message{Sender: s, Command: CONNECT, Argument: arg}, conn)
+	return conn, sendMessage(Message{Sender: s, Command: CONNECT, Argument: arg, Status: SUCCESS}, conn)
 }

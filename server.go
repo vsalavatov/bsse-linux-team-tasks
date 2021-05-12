@@ -62,7 +62,7 @@ func (s *Server) serveClient(conn *net.TCPConn) {
 			err = createSession(id)
 			session := <-*s.sChannel
 			ss[session.id] = session
-			err = sendMessage(Message{SERVER, NEW, ""}, conn)
+			err = sendMessage(Message{SERVER, NEW, "", SUCCESS}, conn)
 			if err != nil {
 				fmt.Println(err)
 				break
@@ -134,7 +134,7 @@ func createSession(id string) error {
 				break
 			}
 
-			if err = sendMessage(Message{SESSION, SHELL, string(buf[:n])}, conn); err != nil {
+			if err = sendMessage(Message{SESSION, SHELL, string(buf[:n]), SUCCESS}, conn); err != nil {
 				fmt.Println("failed to write data to connection", err)
 				_ = pipe.Close()
 				break
@@ -171,7 +171,7 @@ func attachToSession(sConn *net.TCPConn, cConn *net.TCPConn) {
 				fmt.Println("wrong sender")
 				continue
 			}
-			if err := sendMessage(Message{SERVER, msg.Command, msg.Argument}, conn2); err != nil {
+			if err := sendMessage(Message{SERVER, msg.Command, msg.Argument, SUCCESS}, conn2); err != nil {
 				break
 			}
 		}
