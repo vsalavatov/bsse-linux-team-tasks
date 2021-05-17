@@ -191,7 +191,7 @@ loop:
 			}
 			id, ok = idRaw.(string)
 			if !ok {
-				fmt.Println("Malformed NEW message: id is not a string")
+				fmt.Println("Malformed ATTACH message: id is not a string")
 				break loop
 			}
 			session, exists := s.sessions[id]
@@ -199,7 +199,7 @@ loop:
 				data := make(map[string]interface{})
 				data["reason"] = "such a session does not exist"
 				err = sendMessage(Message{
-					Command: NEW,
+					Command: ATTACH,
 					Data:    data,
 					Status:  FAILURE,
 				}, conn)
@@ -227,7 +227,48 @@ loop:
 			s.notifyChan <- id
 			return
 		case KILL:
-			fallthrough
+			var id string
+			idRaw, ok := msg.Data["id"]
+			if !ok {
+				fmt.Println("Ill-formed KILL message: no id field")
+				break loop
+			}
+			id, ok = idRaw.(string)
+			if !ok {
+				fmt.Println("Malformed KILL message: id is not a string")
+				break loop
+			}
+			session, exists := s.sessions[id]
+			if !exists {
+				data := make(map[string]interface{})
+				data["reason"] = "such a session does not exist"
+				err = sendMessage(Message{
+					Command: KILL,
+					Data:    data,
+					Status:  FAILURE,
+				}, conn)
+				if err != nil {
+					fmt.Println("Failed to send error:", err)
+				}
+				break loop
+			}
+			err := session.cmd.Process.Kill()
+			if err != nil {
+				fmt.Println("Failed to kill session:", err)
+			}
+			close(session.inputChan)
+			delete(s.sessions, session.id)
+			fmt.Println("Killed session", id)
+			err = sendMessage(Message{
+				Command: KILL,
+				Data:    make(map[string]interface{}),
+				Status:  SUCCESS,
+			}, conn)
+			if err != nil {
+				fmt.Println("Failed to send confirmation:", err)
+			}
+
+			break loop
 		case DETACH:
 			fallthrough
 		default:
@@ -305,7 +346,9 @@ func createSession(id string, notifyChan chan<- string) (*Session, error) {
 		for {
 			n, err := pipe.Read(buf)
 			if err != nil {
-				fmt.Println("Failed to read from shell's out pipe:", pipe, err)
+				if err != io.EOF {
+					fmt.Println("Failed to read from shell's out pipe:", pipe, err)
+				}
 				break
 			}
 			session.outputSync.Lock()
