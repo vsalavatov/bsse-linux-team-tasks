@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"syscall"
 )
 
 const USAGE = `usage:  command [argument]
@@ -20,11 +19,11 @@ commands:
 	attach <id>`
 
 type Client struct {
-	conn *net.TCPConn
+	conn *TCPConnWrapper
 }
 
 func NewClient(conn *net.TCPConn) *Client {
-	return &Client{conn: conn}
+	return &Client{conn: NewTCPConnWrapper(conn)}
 }
 
 type Config struct {
@@ -46,10 +45,16 @@ func parseArguments(args []string) (Config, error) {
 		}
 	case "attach":
 		command = ATTACH
-		arg = args[1] // TODO if len(argv) < 3 ...
+		if len(args) < 2 {
+			return Config{}, errors.New(USAGE)
+		}
+		arg = args[1]
 	case "kill":
 		command = KILL
-		arg = args[1] // TODO if len(argv) < 3 ...
+		if len(args) < 2 {
+			return Config{}, errors.New(USAGE)
+		}
+		arg = args[1]
 	default:
 		return Config{}, errors.New(USAGE)
 	}
@@ -81,14 +86,15 @@ func (c *Client) doSession(end chan bool) {
 			select {
 			case <-stopReader:
 				return
-			case s := <-inputs:
+			case s, more := <-inputs:
+				if !more {return}
 				data := make(map[string]interface{})
 				data["data"] = base64.StdEncoding.EncodeToString(s)
-				err := sendMessage(Message{
+				err := c.conn.SendMessage(Message{
 					Command: DATA,
 					Data:    data,
 					Status:  SUCCESS,
-				}, c.conn)
+				})
 				if err != nil {
 					fmt.Println("Failed to send data:", err)
 					break
@@ -100,7 +106,7 @@ func (c *Client) doSession(end chan bool) {
 	go func() {
 		var lastPrintedPos int = 0
 		for {
-			msg, err := receiveMessage(c.conn)
+			msg, err := c.conn.RecvMessage()
 			if err != nil {
 				fmt.Println("Failed to receive message:", err)
 				break
@@ -116,15 +122,9 @@ func (c *Client) doSession(end chan bool) {
 				break
 			}
 			startPos := int(startPosF)
-			dataR, ok := msg.Data["data"]
-			dataS, ok2 := dataR.(string)
-			if !ok || !ok2 {
-				fmt.Println("Ill-formed response:", msg)
-				break
-			}
-			data, err := base64.StdEncoding.DecodeString(dataS)
+			data, err := retrieveByteArray(msg.Data, "data")
 			if err != nil {
-				fmt.Println("Ill-formed response:", msg, dataS)
+				fmt.Println("Ill-formed response:", err)
 				break
 			}
 
@@ -144,11 +144,11 @@ func (c *Client) doSession(end chan bool) {
 
 	<-end
 	stopReader <- true
-	err := sendMessage(Message{
+	err := c.conn.SendMessage(Message{
 		Command: DETACH,
 		Data:    make(map[string]interface{}),
 		Status:  SUCCESS,
-	}, c.conn)
+	})
 	if err != nil {
 		fmt.Println("Failed to send data:", err)
 	}
@@ -160,7 +160,7 @@ func (c *Client) Do(args []string) {
 	sigs := make(chan os.Signal, 1)
 	end := make(chan bool, 2)
 
-	signal.Notify(sigs, syscall.SIGINT)
+	signal.Notify(sigs, os.Interrupt)
 
 	go func() {
 		<-sigs
@@ -175,33 +175,24 @@ func (c *Client) Do(args []string) {
 
 	switch conf.command {
 	case LIST:
-		err = sendMessage(Message{
+		err = c.conn.SendMessage(Message{
 			Command: LIST,
 			Data:    make(map[string]interface{}),
 			Status:  SUCCESS,
-		}, c.conn)
+		})
 		if err != nil {
 			fmt.Println("Failed to send LIST:", err)
 			return
 		}
-		resp, err := receiveMessage(c.conn)
+		resp, err := c.conn.RecvMessage()
 		if err != nil {
 			fmt.Println("Failed to receive response:", err)
 			return
 		}
-		sessionsRaw, ok := resp.Data["sessions"]
-		if !ok {
-			fmt.Println(`No "sessions" field in response`)
+		sessions, err := retrieveStringArray(resp.Data, "sessions")
+		if err != nil {
+			fmt.Println("Ill-formed LIST response:", err, resp)
 			return
-		}
-		sessionsRawSlice, _ := sessionsRaw.([]interface{})
-		sessions := make([]string, len(sessionsRawSlice))
-		for i := range sessionsRawSlice {
-			sessions[i], ok = sessionsRawSlice[i].(string)
-			if !ok {
-				fmt.Println("Ill-formed LIST response")
-			return
-			}
 		}
 		fmt.Println(len(sessions), "sessions:")
 		for _, sess := range sessions {
@@ -214,16 +205,16 @@ func (c *Client) Do(args []string) {
 		if len(conf.argument) > 0 {
 			data["id"] = conf.argument
 		}
-		err = sendMessage(Message{
+		err = c.conn.SendMessage(Message{
 			Command: conf.command,
 			Data:    data,
 			Status:  SUCCESS,
-		}, c.conn)
+		})
 		if err != nil {
 			fmt.Println("Failed to send", conf.command, ":", err)
 			return
 		}
-		resp, err := receiveMessage(c.conn)
+		resp, err := c.conn.RecvMessage()
 		if err != nil {
 			fmt.Println("Failed to receive response:", err)
 			return
@@ -240,16 +231,16 @@ func (c *Client) Do(args []string) {
 	case KILL:
 		data := make(map[string]interface{})
 		data["id"] = conf.argument
-		err = sendMessage(Message{
+		err = c.conn.SendMessage(Message{
 			Command: KILL,
 			Data:    data,
 			Status:  SUCCESS,
-		}, c.conn)
+		})
 		if err != nil {
 			fmt.Println("Failed to send LIST:", err)
 			return
 		}
-		resp, err := receiveMessage(c.conn)
+		resp, err := c.conn.RecvMessage()
 		if err != nil {
 			fmt.Println("Failed to receive response:", err)
 			return
@@ -259,6 +250,7 @@ func (c *Client) Do(args []string) {
 			return
 		}
 		if resp.Status == SUCCESS {
+			fmt.Println("OK!")
 			return
 		}
 		fmt.Println("Failed to kill the session:", resp)

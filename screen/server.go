@@ -2,6 +2,7 @@ package screen
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -10,7 +11,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -41,7 +41,7 @@ func NewServer(listener *net.TCPListener) *Server {
 	return &Server{
 		listener:    listener,
 		sessions:    make(map[string]*Session),
-		notifyChan:  make(chan string, 1),
+		notifyChan:  make(chan string, 5),
 		sessionSubs: make(map[string][]chan bool), // false means "terminate"
 		notifySync:  &sync.Mutex{},
 	}
@@ -52,16 +52,18 @@ func (s *Server) ListenAndServe() error {
 	end := make(chan bool, 5)
 	term := make(chan bool, 1)
 
-	signal.Notify(sigs, syscall.SIGINT)
+	signal.Notify(sigs, os.Interrupt)
 
 	go func() {
 		<-sigs
+		fmt.Println("Caught SIGINT")
 		end <- true
 		end <- true
 	}()
 
 	go func() {
 		<-end
+		fmt.Println("Terminating sessions...")
 		s.notifySync.Lock()
 		for _, subs := range s.sessionSubs {
 			for _, sub := range subs {
@@ -69,14 +71,17 @@ func (s *Server) ListenAndServe() error {
 			}
 		}
 		s.notifySync.Unlock()
+		fmt.Println("Sessions are notified about termination")
 		time.Sleep(1 * time.Second)
 		term <- true
 	}()
 
 	go func() {
 		for id := range s.notifyChan {
+			fmt.Println("Notifying session", id)
 			s.notifySync.Lock()
 			for _, sub := range s.sessionSubs[id] {
+				fmt.Println("Notifying session sub", sub)
 				sub <- true
 			}
 			s.notifySync.Unlock()
@@ -89,9 +94,15 @@ loop:
 	for {
 		select {
 		case <-end:
+			fmt.Println("Finishing listening...")
 			break loop
 		default:
+			_ = s.listener.SetDeadline(time.Now().Add(time.Millisecond * 100))
 			conn, err = s.listener.AcceptTCP()
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				err = nil
+				break // breaks from select
+			}
 			if err != nil {
 				end <- true
 				break loop
@@ -101,13 +112,15 @@ loop:
 	}
 
 	<-term
+	fmt.Println("Terminated.")
 	return err
 }
 
 func (s *Server) serveClient(conn *net.TCPConn) {
+	wconn := NewTCPConnWrapper(conn)
 loop:
 	for {
-		msg, err := receiveMessage(conn)
+		msg, err := wconn.RecvMessage()
 		if err != nil {
 			fmt.Println("Failed to receive message:", err, conn)
 			break
@@ -120,14 +133,15 @@ loop:
 			}
 			data := make(map[string]interface{})
 			data["sessions"] = sessions
-			err = sendMessage(Message{
+			err = wconn.SendMessage(Message{
 				Command: LIST,
 				Data:    data,
 				Status:  SUCCESS,
-			}, conn)
+			})
 			if err != nil {
 				fmt.Println("Failed to send confirmation:", err)
 			}
+			fmt.Println("LIST ", s.sessionSubs)
 			break loop
 		case NEW:
 			var id string
@@ -140,11 +154,11 @@ loop:
 				if _, exists := s.sessions[id]; exists {
 					data := make(map[string]interface{})
 					data["reason"] = "id is already taken"
-					err = sendMessage(Message{
+					err = wconn.SendMessage(Message{
 						Command: NEW,
 						Data:    data,
 						Status:  FAILURE,
-					}, conn)
+					})
 					if err != nil {
 						fmt.Println("Failed to send error:", err)
 					}
@@ -163,23 +177,26 @@ loop:
 				fmt.Println("Failed to create new session:", err)
 				break loop
 			}
-			s.sessions[id] = session
-
 			s.notifySync.Lock()
+			fmt.Println("Adding", session, " with id", id)
+			s.sessions[id] = session
 			clientNotifyChan := make(chan bool, 1)
 			s.sessionSubs[id] = []chan bool{clientNotifyChan}
+			fmt.Println("NEW NEW NEW")
+			fmt.Println("sessions", s.sessions)
+			fmt.Println("subs", s.sessionSubs)
 			s.notifySync.Unlock()
 
-			err = sendMessage(Message{
+			err = wconn.SendMessage(Message{
 				Command: NEW,
 				Data:    make(map[string]interface{}),
 				Status:  SUCCESS,
-			}, conn)
+			})
 			if err != nil {
 				fmt.Println("Failed to send confirmation:", err)
 			}
 
-			s.attachToSession(conn, session, clientNotifyChan)
+			s.attachToSession(wconn, session, clientNotifyChan)
 			return
 		case ATTACH:
 			id, err := retrieveString(msg.Data, "id")
@@ -191,11 +208,11 @@ loop:
 			if !exists {
 				data := make(map[string]interface{})
 				data["reason"] = "such a session does not exist"
-				err = sendMessage(Message{
+				err = wconn.SendMessage(Message{
 					Command: ATTACH,
 					Data:    data,
 					Status:  FAILURE,
-				}, conn)
+				})
 				if err != nil {
 					fmt.Println("Failed to send error:", err)
 				}
@@ -207,16 +224,16 @@ loop:
 			s.sessionSubs[id] = append(s.sessionSubs[id], clientNotifyChan)
 			s.notifySync.Unlock()
 
-			err = sendMessage(Message{
+			err = wconn.SendMessage(Message{
 				Command: ATTACH,
 				Data:    make(map[string]interface{}),
 				Status:  SUCCESS,
-			}, conn)
+			})
 			if err != nil {
 				fmt.Println("Failed to send confirmation:", err)
 			}
 
-			s.attachToSession(conn, session, clientNotifyChan)
+			s.attachToSession(wconn, session, clientNotifyChan)
 			s.notifyChan <- id
 			return
 		case KILL:
@@ -229,11 +246,11 @@ loop:
 			if !exists {
 				data := make(map[string]interface{})
 				data["reason"] = "such a session does not exist"
-				err = sendMessage(Message{
+				err = wconn.SendMessage(Message{
 					Command: KILL,
 					Data:    data,
 					Status:  FAILURE,
-				}, conn)
+				})
 				if err != nil {
 					fmt.Println("Failed to send error:", err)
 				}
@@ -246,11 +263,11 @@ loop:
 			close(session.inputChan)
 			delete(s.sessions, session.id)
 			fmt.Println("Killed session", id)
-			err = sendMessage(Message{
+			err = wconn.SendMessage(Message{
 				Command: KILL,
 				Data:    make(map[string]interface{}),
 				Status:  SUCCESS,
-			}, conn)
+			})
 			if err != nil {
 				fmt.Println("Failed to send confirmation:", err)
 			}
@@ -260,11 +277,11 @@ loop:
 		default:
 			data := make(map[string]interface{})
 			data["reason"] = "not implemented"
-			err = sendMessage(Message{
+			err = wconn.SendMessage(Message{
 				Command: msg.Command,
 				Data:    data,
 				Status:  FAILURE,
-			}, conn)
+			})
 			if err != nil {
 				fmt.Println("Failed to send error:", err)
 			}
@@ -312,6 +329,7 @@ func createSession(id string, notifyChan chan<- string) (*Session, error) {
 	inputToShell := func() {
 		for {
 			msg, stillOpen := <-session.inputChan
+			fmt.Println("ITS", msg, stillOpen)
 			if !stillOpen {
 				err := shellStdin.Close()
 				if err != nil {
@@ -344,6 +362,7 @@ func createSession(id string, notifyChan chan<- string) (*Session, error) {
 				session.output = session.output[diff:]
 			}
 			session.outputSync.Unlock()
+			fmt.Println("output notify", session.id)
 			notifyChan <- session.id
 		}
 	}
@@ -357,10 +376,12 @@ func createSession(id string, notifyChan chan<- string) (*Session, error) {
 	return session, nil
 }
 
-func (s *Server) attachToSession(clientConn *net.TCPConn, session *Session, notifyChan chan bool) {
+func (s *Server) attachToSession(clientConn *TCPConnWrapper, session *Session, notifyChan chan bool) {
+	fmt.Println("Attaching", clientConn, "to", session.id, "(notify chan", notifyChan, ")")
 	detach := make(chan bool, 1)
 
 	rmSub := func() {
+		fmt.Println("Removing subscription to session", session.id, "conn", clientConn)
 		s.notifySync.Lock()
 		defer s.notifySync.Unlock()
 		subs := s.sessionSubs[session.id]
@@ -374,12 +395,16 @@ func (s *Server) attachToSession(clientConn *net.TCPConn, session *Session, noti
 	}
 
 	go func() {
+		fmt.Println("Starting input-coro...")
+		closed := false
 		for {
-			msg, err := receiveMessage(clientConn)
+			fmt.Println("AAA", clientConn)
+			msg, err := clientConn.RecvMessage()
 			if err != nil {
 				fmt.Println("Failed to receive message:", err)
 				break
 			}
+			fmt.Println("Got", msg)
 			if msg.Command == DETACH {
 				detach <- true
 				break
@@ -393,49 +418,58 @@ func (s *Server) attachToSession(clientConn *net.TCPConn, session *Session, noti
 				fmt.Println("DATA message is ill-formed: ", msg)
 				break
 			}
-			if len(dataBytes) > 0 {
+			fmt.Println("OOOOO", dataBytes)
+			if len(dataBytes) > 0 && !closed {
 				session.inputChan <- dataBytes
 			}
-			if msg.Status == FAILURE {
+			if msg.Status == FAILURE && !closed {
 				close(session.inputChan)
+				closed = true
 			}
 		}
-		_ = clientConn.Close()
+		fmt.Println("Closing input-coro for session", session.id, "conn", clientConn)
+		_ = clientConn.Conn.Close()
 		rmSub()
 	}()
 
 	go func() {
+		fmt.Println("Starting output-coro...")
 	loop:
 		for {
+			fmt.Println("BBB")
 			select {
 			case <-detach:
+				fmt.Println("Client detached. session", session.id, "conn", clientConn)
 				break loop
-			case status := <-notifyChan:
+			case status, more := <-notifyChan:
+				fmt.Println(session.id, "notify", status, more)
 				if !status { // terminate
 					err := session.cmd.Process.Kill()
 					if err != nil {
 						fmt.Println("Failed to kill session:", err)
 					}
+					fmt.Println("Killed session", session.id)
 					break loop
 				}
 				session.outputSync.Lock()
 				data := make(map[string]interface{})
 				data["start_pos"] = session.outputStartPosition
 				data["data"] = base64.StdEncoding.EncodeToString(session.output)
+				session.outputSync.Unlock()
 				msg := Message{
 					Command: DATA,
 					Data:    data,
 					Status:  SUCCESS,
 				}
-				err := sendMessage(msg, clientConn)
-				session.outputSync.Unlock()
+				err := clientConn.SendMessage(msg)
 				if err != nil {
 					fmt.Println("Failed to send DATA:", err)
 					break loop
 				}
 			}
 		}
-		_ = clientConn.Close()
+		fmt.Println("Closing output-coro for session", session.id, "conn", clientConn)
+		_ = clientConn.Conn.Close()
 		rmSub()
 	}()
 }
