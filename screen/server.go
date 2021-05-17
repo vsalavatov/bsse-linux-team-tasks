@@ -115,7 +115,7 @@ loop:
 		switch msg.Command {
 		case LIST:
 			var sessions []string
-			for id, _ := range s.sessions {
+			for id := range s.sessions {
 				sessions = append(sessions, id)
 			}
 			data := make(map[string]interface{})
@@ -131,11 +131,10 @@ loop:
 			break loop
 		case NEW:
 			var id string
-			idRaw, ok := msg.Data["id"]
-			if ok {
-				id, ok = idRaw.(string)
-				if !ok {
-					fmt.Println("Malformed NEW message: id is not a string")
+			if _, ok := msg.Data["id"]; ok {
+				id, err = retrieveString(msg.Data, "id")
+				if err != nil {
+					fmt.Println("Ill-formed NEW message:", err)
 					break loop
 				}
 				if _, exists := s.sessions[id]; exists {
@@ -183,15 +182,9 @@ loop:
 			s.attachToSession(conn, session, clientNotifyChan)
 			return
 		case ATTACH:
-			var id string
-			idRaw, ok := msg.Data["id"]
-			if !ok {
-				fmt.Println("Ill-formed ATTACH message: no id field")
-				break loop
-			}
-			id, ok = idRaw.(string)
-			if !ok {
-				fmt.Println("Malformed ATTACH message: id is not a string")
+			id, err := retrieveString(msg.Data, "id")
+			if err != nil {
+				fmt.Println("Ill-formed ATTACH message:", err)
 				break loop
 			}
 			session, exists := s.sessions[id]
@@ -227,15 +220,9 @@ loop:
 			s.notifyChan <- id
 			return
 		case KILL:
-			var id string
-			idRaw, ok := msg.Data["id"]
-			if !ok {
-				fmt.Println("Ill-formed KILL message: no id field")
-				break loop
-			}
-			id, ok = idRaw.(string)
-			if !ok {
-				fmt.Println("Malformed KILL message: id is not a string")
+			id, err := retrieveString(msg.Data, "id")
+			if err != nil {
+				fmt.Println("Ill-formed KILL message:", err)
 				break loop
 			}
 			session, exists := s.sessions[id]
@@ -252,7 +239,7 @@ loop:
 				}
 				break loop
 			}
-			err := session.cmd.Process.Kill()
+			err = session.cmd.Process.Kill()
 			if err != nil {
 				fmt.Println("Failed to kill session:", err)
 			}
@@ -267,7 +254,6 @@ loop:
 			if err != nil {
 				fmt.Println("Failed to send confirmation:", err)
 			}
-
 			break loop
 		case DETACH:
 			fallthrough
@@ -326,7 +312,6 @@ func createSession(id string, notifyChan chan<- string) (*Session, error) {
 	inputToShell := func() {
 		for {
 			msg, stillOpen := <-session.inputChan
-			fmt.Println("")
 			if !stillOpen {
 				err := shellStdin.Close()
 				if err != nil {
@@ -379,7 +364,7 @@ func (s *Server) attachToSession(clientConn *net.TCPConn, session *Session, noti
 		s.notifySync.Lock()
 		defer s.notifySync.Unlock()
 		subs := s.sessionSubs[session.id]
-		nsubs := []chan bool{}
+		var nsubs []chan bool
 		for _, sub := range subs {
 			if sub != notifyChan {
 				nsubs = append(nsubs, sub)
@@ -403,17 +388,7 @@ func (s *Server) attachToSession(clientConn *net.TCPConn, session *Session, noti
 				fmt.Println("Expected DATA message, but got:", msg)
 				break
 			}
-			data, ok := msg.Data["data"]
-			if !ok {
-				fmt.Println("DATA message is ill-formed: ", msg)
-				break
-			}
-			dataS, ok := data.(string)
-			if !ok {
-				fmt.Println("DATA message is ill-formed: ", msg)
-				break
-			}
-			dataBytes, err := base64.StdEncoding.DecodeString(dataS)
+			dataBytes, err := retrieveByteArray(msg.Data, "data")
 			if err != nil {
 				fmt.Println("DATA message is ill-formed: ", msg)
 				break

@@ -1,14 +1,16 @@
 package screen
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net"
-	"sync/atomic"
 )
 
 const KServerPort = 8998
 
 type Command int
+
 const (
 	NEW Command = iota
 	LIST
@@ -20,6 +22,7 @@ const (
 )
 
 type Status bool
+
 const (
 	FAILURE Status = false
 	SUCCESS        = true
@@ -29,19 +32,6 @@ type Message struct {
 	Command Command
 	Data    map[string]interface{}
 	Status  Status
-}
-
-type AtomBool struct {flag int32}
-
-func (b *AtomBool) Set(value bool) {
-	var i int32 = 0
-	if value {i = 1}
-	atomic.StoreInt32(&(b.flag), int32(i))
-}
-
-func (b *AtomBool) Get() bool {
-	if atomic.LoadInt32(&(b.flag)) != 0 {return true}
-	return false
 }
 
 func sendMessage(msg Message, conn *net.TCPConn) error {
@@ -55,4 +45,30 @@ func receiveMessage(conn *net.TCPConn) (Message, error) {
 	enc := json.NewDecoder(conn)
 	err := enc.Decode(&msg)
 	return msg, err
+}
+
+func retrieveString(m map[string]interface{}, key string) (string, error) {
+	var val string
+	valRaw, ok := m[key]
+	if !ok {
+		return "", fmt.Errorf("no %v field", key)
+	}
+	val, ok = valRaw.(string)
+	if !ok {
+		return "", fmt.Errorf("%v is not a string", key)
+	}
+	return val, nil
+}
+
+func retrieveByteArray(m map[string]interface{}, key string) ([]byte, error) {
+	data, ok := m["data"]
+	if !ok {
+		return nil, fmt.Errorf("no %v field", key)
+	}
+	dataS, ok := data.(string)
+	if !ok {
+		return nil, fmt.Errorf("byte array is not base64-encoded")
+	}
+	dataBytes, err := base64.StdEncoding.DecodeString(dataS)
+	return dataBytes, err
 }
