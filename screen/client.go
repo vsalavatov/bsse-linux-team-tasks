@@ -82,22 +82,26 @@ func (c *Client) doSession(end chan bool) {
 	}()
 
 	go func() {
+	loop:
 		for {
 			select {
 			case <-stopReader:
 				return
 			case s, more := <-inputs:
-				if !more {return}
+
 				data := make(map[string]interface{})
 				data["data"] = base64.StdEncoding.EncodeToString(s)
 				err := c.conn.SendMessage(Message{
 					Command: DATA,
 					Data:    data,
-					Status:  SUCCESS,
+					Status:  Status(more),
 				})
 				if err != nil {
 					fmt.Println("Failed to send data:", err)
-					break
+					break loop
+				}
+				if !more {
+					break loop
 				}
 			}
 		}
@@ -153,7 +157,7 @@ func (c *Client) doSession(end chan bool) {
 		fmt.Println("Failed to send data:", err)
 	}
 	fmt.Println()
-	fmt.Println("exiting")
+	fmt.Println("[detached]")
 }
 
 func (c *Client) Do(args []string) {

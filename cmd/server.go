@@ -15,11 +15,6 @@ func main() {
 		return
 	}
 
-	defer func() {
-		err := recover()
-		fmt.Println("RECOVER", err)
-	}()
-
 	server := screen.NewServer(listener)
 
 	err = server.ListenAndServe()
