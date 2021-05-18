@@ -37,6 +37,9 @@ type Server struct {
 	notifyChan  chan string
 	sessionSubs map[string][]chan bool
 	notifySync  *sync.Mutex
+
+	sigs        chan os.Signal
+	redirectErr bool
 }
 
 func NewServer(listener *net.TCPListener) *Server {
@@ -46,20 +49,21 @@ func NewServer(listener *net.TCPListener) *Server {
 		notifyChan:  make(chan string, 5),
 		sessionSubs: make(map[string][]chan bool), // false means "terminate"
 		notifySync:  &sync.Mutex{},
+		sigs:        make(chan os.Signal, 1),
+		redirectErr: true,
 	}
 }
 
 func (s *Server) ListenAndServe() error {
-	sigs := make(chan os.Signal, 1)
 	end := make(chan bool, 5)
 	term := make(chan bool, 1)
 
-	signal.Notify(sigs, os.Interrupt)
+	signal.Notify(s.sigs, os.Interrupt)
 	// signal.Ignore(syscall.SIGCHLD)
 
 	go func() {
 		for {
-			x := <-sigs
+			x := <-s.sigs
 			//if x == syscall.SIGURG || x == syscall.SIGTTIN {
 			//	continue
 			//}
@@ -179,7 +183,7 @@ loop:
 					}
 				}
 			}
-			session, err := createSession(id, s.notifyChan)
+			session, err := s.createSession(id)
 			if err != nil {
 				fmt.Println("Failed to create new session:", err)
 				break loop
@@ -221,12 +225,26 @@ loop:
 				}
 				break loop
 			}
-
+			var clientNotifyChan chan bool
+			alreadyAttached := false
 			s.notifySync.Lock()
-			clientNotifyChan := make(chan bool, 1)
-			s.sessionSubs[id] = append(s.sessionSubs[id], clientNotifyChan)
+			if len(s.sessionSubs[id]) > 0 {
+				alreadyAttached = true
+			} else {
+				clientNotifyChan = make(chan bool, 1)
+				s.sessionSubs[id] = append(s.sessionSubs[id], clientNotifyChan)
+			}
 			s.notifySync.Unlock()
-
+			if alreadyAttached {
+				data := make(map[string]interface{})
+				data["reason"] = "there's another client attached to this session"
+				err = wconn.SendMessage(Message{
+					Command: ATTACH,
+					Data:    data,
+					Status:  FAILURE,
+				})
+				return
+			}
 			err = wconn.SendMessage(Message{
 				Command: ATTACH,
 				Data:    make(map[string]interface{}),
@@ -307,7 +325,7 @@ func generateId() string {
 	return result
 }
 
-func createSession(id string, notifyChan chan<- string) (*Session, error) {
+func (s *Server) createSession(id string) (*Session, error) {
 	shell := exec.Command("sh", "-i")
 	shell.SysProcAttr = &syscall.SysProcAttr{
 		Setsid: true,
@@ -373,12 +391,14 @@ func createSession(id string, notifyChan chan<- string) (*Session, error) {
 				session.output = session.output[diff:]
 			}
 			session.outputSync.Unlock()
-			notifyChan <- session.id
+			s.notifyChan <- session.id
 		}
 	}
 
 	go shellToBuffer(shellStdout)
-	go shellToBuffer(shellStderr)
+	if s.redirectErr {
+		go shellToBuffer(shellStderr)
+	}
 	go inputToShell()
 
 	fmt.Println("Started session", id, "with PID", shell.Process.Pid)

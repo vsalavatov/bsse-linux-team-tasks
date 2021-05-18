@@ -12,7 +12,7 @@ func main() {
 		fmt.Println(screen.USAGE)
 		return
 	}
-	conn, err := screen.ConnectToServer()
+	conn, err := screen.ConnectToServer(screen.KServerPort)
 	if err != nil {
 		panic(err)
 	}

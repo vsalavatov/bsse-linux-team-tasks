@@ -1,10 +1,10 @@
 package screen
 
 import (
-	"bufio"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -19,11 +19,14 @@ commands:
 	attach <id>`
 
 type Client struct {
-	conn *TCPConnWrapper
+	conn   *TCPConnWrapper
+	reader io.Reader
+	writer io.Writer
+	sigs   chan os.Signal
 }
 
 func NewClient(conn *net.TCPConn) *Client {
-	return &Client{conn: NewTCPConnWrapper(conn)}
+	return &Client{conn: NewTCPConnWrapper(conn), reader: os.Stdin, writer: os.Stdout, sigs: make(chan os.Signal, 1)}
 }
 
 type Config struct {
@@ -69,10 +72,9 @@ func (c *Client) doSession(end chan bool) {
 	inputs := make(chan []byte, 10)
 
 	go func() {
-		reader := bufio.NewReader(os.Stdin)
 		var buf [4096]byte
 		for {
-			n, err := reader.Read(buf[:])
+			n, err := c.reader.Read(buf[:])
 			if err != nil {
 				close(inputs)
 				return
@@ -139,7 +141,7 @@ func (c *Client) doSession(end chan bool) {
 				}
 				toPrint := data[toPrintFrom:]
 				lastPrintedPos = startPos + len(data)
-				if _, err := os.Stdout.Write(toPrint); err != nil {
+				if _, err := c.writer.Write(toPrint); err != nil {
 					break
 				}
 			}
@@ -161,13 +163,12 @@ func (c *Client) doSession(end chan bool) {
 }
 
 func (c *Client) Do(args []string) {
-	sigs := make(chan os.Signal, 1)
 	end := make(chan bool, 2)
 
-	signal.Notify(sigs, os.Interrupt)
+	signal.Notify(c.sigs, os.Interrupt)
 
 	go func() {
-		<-sigs
+		<-c.sigs
 		end <- true
 	}()
 
@@ -198,9 +199,9 @@ func (c *Client) Do(args []string) {
 			fmt.Println("Ill-formed LIST response:", err, resp)
 			return
 		}
-		fmt.Println(len(sessions), "sessions:")
+		fmt.Fprintln(c.writer, len(sessions), "sessions:")
 		for _, sess := range sessions {
-			fmt.Println(sess)
+			fmt.Fprintln(c.writer, sess)
 		}
 	case NEW:
 		fallthrough
@@ -228,7 +229,7 @@ func (c *Client) Do(args []string) {
 			return
 		}
 		if resp.Status != SUCCESS {
-			fmt.Println("Operation failed:", resp)
+			fmt.Fprintln(c.writer, "Operation failed:", resp.Data["reason"])
 			return
 		}
 		c.doSession(end)
@@ -261,6 +262,6 @@ func (c *Client) Do(args []string) {
 	}
 }
 
-func ConnectToServer() (*net.TCPConn, error) {
-	return net.DialTCP("tcp", nil, &net.TCPAddr{Port: KServerPort})
+func ConnectToServer(port int) (*net.TCPConn, error) {
+	return net.DialTCP("tcp", nil, &net.TCPAddr{Port: port})
 }
