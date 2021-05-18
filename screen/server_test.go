@@ -46,9 +46,9 @@ func assertOutput(t *testing.T, expected string, actualBytes []byte) {
 	}
 }
 
-func createClient(input string, writer io.Writer, args []string) *Client {
+func createClient(input string, writer io.Writer, args []string, port int) *Client {
 	reader := strings.NewReader(input)
-	conn, _ := ConnectToServer(TestServerPort)
+	conn, _ := ConnectToServer(port)
 	c := fakeClient(conn, reader, writer)
 
 	go c.Do(args)
@@ -76,8 +76,8 @@ func quiet() func() {
 	}
 }
 
-func createServer() chan os.Signal {
-	listener, _ := net.ListenTCP("tcp", &net.TCPAddr{Port: TestServerPort})
+func createServer(port int) chan os.Signal {
+	listener, _ := net.ListenTCP("tcp", &net.TCPAddr{Port: port})
 	sigs := make(chan os.Signal, 1)
 	server := fakeServer(listener, sigs)
 	go func() {
@@ -87,92 +87,92 @@ func createServer() chan os.Signal {
 }
 func Test_new(t *testing.T) {
 	defer quiet()()
-	sSigs := createServer()
+	port := TestServerPort + 0
+	sSigs := createServer(port)
 
 	t.Run("echo hello to new session", func(t *testing.T) {
 		writer := bytes.NewBuffer(make([]byte, 0, 4096))
-		stopClient(createClient(hello, writer, []string{"new", "id1"}))
+		stopClient(createClient(hello, writer, []string{"new", "id1"}, port))
 		assertOutput(t, "hello\n", writer.Bytes())
 	})
 
 	t.Run("id is already taken", func(t *testing.T) {
 		writer := bytes.NewBuffer(make([]byte, 0, 4096))
-		stopClient(createClient("", bytes.NewBuffer(make([]byte, 0, 4096)), []string{"new", "id2"}))
-		stopClient(createClient("", writer, []string{"new", "id2"}))
+		stopClient(createClient("", bytes.NewBuffer(make([]byte, 0, 4096)), []string{"new", "id2"}, port))
+		stopClient(createClient("", writer, []string{"new", "id2"}, port))
 		assertOutput(t, "Operation failed: id is already taken\n", writer.Bytes())
 	})
 
 	sSigs <- syscall.SIGINT
-	time.Sleep(time.Millisecond * 100)
 }
 
 func Test_attach(t *testing.T) {
 	defer quiet()()
-	sSigs := createServer()
+	port := TestServerPort + 1
+	sSigs := createServer(port)
 
 	t.Run("attach to session", func(t *testing.T) {
 		writer := bytes.NewBuffer(make([]byte, 0, 4096))
-		stopClient(createClient(cycle, bytes.NewBuffer(make([]byte, 0, 4096)), []string{"new", "id1"}))
-		stopClient(createClient("", writer, []string{"attach", "id1"}))
+		stopClient(createClient(cycle, bytes.NewBuffer(make([]byte, 0, 4096)), []string{"new", "id1"}, port))
+		stopClient(createClient("", writer, []string{"attach", "id1"}, port))
 		assertOutput(t, "1\n2\n3\n", writer.Bytes())
 	})
 
 	t.Run("no such session", func(t *testing.T) {
 		writer := bytes.NewBuffer(make([]byte, 0, 4096))
-		stopClient(createClient("", writer, []string{"attach", "id2"}))
+		stopClient(createClient("", writer, []string{"attach", "id2"}, port))
 		assertOutput(t, "Operation failed: such a session does not exist\n", writer.Bytes())
 	})
 
 	t.Run("failed to attach to the same session twice", func(t *testing.T) {
-		c1 := createClient("", bytes.NewBuffer(make([]byte, 0, 4096)), []string{"new", "id3"})
+		c1 := createClient("", bytes.NewBuffer(make([]byte, 0, 4096)), []string{"new", "id3"}, port)
 
 		writer2 := bytes.NewBuffer(make([]byte, 0, 4096))
-		stopClient(createClient("", writer2, []string{"attach", "id3"}))
+		stopClient(createClient("", writer2, []string{"attach", "id3"}, port))
 		stopClient(c1)
 		assertOutput(t, "Operation failed: there's another client attached to this session\n", writer2.Bytes())
 	})
 
 	sSigs <- syscall.SIGINT
-	time.Sleep(time.Millisecond * 100)
 }
 
 func Test_kill(t *testing.T) {
 	defer quiet()()
-	sSigs := createServer()
+	port := TestServerPort + 2
+	sSigs := createServer(port)
 
 	t.Run("create and kill session", func(t *testing.T) {
-		stopClient(createClient("", bytes.NewBuffer(make([]byte, 0, 4096)), []string{"new", "id1"}))
+		stopClient(createClient("", bytes.NewBuffer(make([]byte, 0, 4096)), []string{"new", "id1"}, port))
 		writer := bytes.NewBuffer(make([]byte, 0, 4096))
-		stopClient(createClient("", writer, []string{"list"}))
+		stopClient(createClient("", writer, []string{"list"}, port))
 		assertOutput(t, "1 sessions:\nid1\n", writer.Bytes())
-		stopClient(createClient("", bytes.NewBuffer(make([]byte, 0, 4096)), []string{"kill", "id1"}))
+		stopClient(createClient("", bytes.NewBuffer(make([]byte, 0, 4096)), []string{"kill", "id1"}, port))
 		writer = bytes.NewBuffer(make([]byte, 0, 4096))
-		stopClient(createClient("", writer, []string{"list"}))
+		stopClient(createClient("", writer, []string{"list"}, port))
 		assertOutput(t, "0 sessions:\n", writer.Bytes())
 	})
 
 	sSigs <- syscall.SIGINT
-	time.Sleep(time.Millisecond * 100)
 }
 
 func Test_list(t *testing.T) {
 	defer quiet()()
-	sSigs := createServer()
+	port := TestServerPort + 3
+	sSigs := createServer(port)
 
 	t.Run("empty session's list", func(t *testing.T) {
 		writer := bytes.NewBuffer(make([]byte, 0, 4096))
-		stopClient(createClient("", writer, []string{"list"}))
+		stopClient(createClient("", writer, []string{"list"}, port))
 		assertOutput(t, "0 sessions:\n", writer.Bytes())
 	})
 
 	t.Run("list sessions", func(t *testing.T) {
-		stopClient(createClient("", bytes.NewBuffer(make([]byte, 0, 4096)), []string{"new", "id1"}))
-		stopClient(createClient("", bytes.NewBuffer(make([]byte, 0, 4096)), []string{"new", "id2"}))
+		stopClient(createClient("", bytes.NewBuffer(make([]byte, 0, 4096)), []string{"new", "id1"}, port))
+		stopClient(createClient("", bytes.NewBuffer(make([]byte, 0, 4096)), []string{"new", "id2"}, port))
 		writer := bytes.NewBuffer(make([]byte, 0, 4096))
-		stopClient(createClient("", writer, []string{"list"}))
+		stopClient(createClient("", writer, []string{"list"}, port))
 		assertOutput(t, "2 sessions:\nid1\nid2\n", writer.Bytes())
 	})
 
 	sSigs <- syscall.SIGINT
-	time.Sleep(time.Millisecond * 100)
 }
