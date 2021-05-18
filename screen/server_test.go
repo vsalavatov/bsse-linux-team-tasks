@@ -173,6 +173,24 @@ func Test_kill(t *testing.T) {
 		assertListOutput(t, map[string]bool{}, writer.Bytes())
 	})
 
+	t.Run("no such session", func(t *testing.T) {
+		writer := bytes.NewBuffer(make([]byte, 0, 4096))
+		stopClient(createClient("", writer, []string{"kill", "id2"}, port))
+		assertOutput(t, "Failed to kill the session: such a session does not exist\n", writer.Bytes())
+	})
+
+	t.Run("killed by another client", func(t *testing.T) {
+		c1 := createClient(hello, bytes.NewBuffer(make([]byte, 0, 4096)), []string{"new", "id3"}, port)
+		writer2 := bytes.NewBuffer(make([]byte, 0, 4096))
+		stopClient(createClient("", writer2, []string{"kill", "id3"}, port))
+		stopClient(c1)
+		assertOutput(t, "OK!\n", writer2.Bytes())
+
+		writerList := bytes.NewBuffer(make([]byte, 0, 4096))
+		stopClient(createClient("", writerList, []string{"list"}, port))
+		assertListOutput(t, map[string]bool{}, writerList.Bytes())
+	})
+
 	sSigs <- syscall.SIGINT
 	time.Sleep(time.Millisecond * 100)
 }

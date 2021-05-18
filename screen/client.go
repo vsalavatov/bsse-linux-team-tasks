@@ -255,10 +255,10 @@ func (c *Client) Do(args []string) {
 			return
 		}
 		if resp.Status == SUCCESS {
-			fmt.Println("OK!")
+			fmt.Fprintln(c.writer,"OK!")
 			return
 		}
-		fmt.Println("Failed to kill the session:", resp.Data["reason"])
+		fmt.Fprintln(c.writer,"Failed to kill the session:", resp.Data["reason"])
 	}
 }
 
