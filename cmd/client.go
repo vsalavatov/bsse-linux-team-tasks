@@ -14,7 +14,8 @@ func main() {
 	}
 	conn, err := screen.ConnectToServer(screen.KServerPort)
 	if err != nil {
-		panic(err)
+		fmt.Println("Failed to connect to the server:", err)
+		return
 	}
 	c := screen.NewClient(conn)
 	c.Do(args)

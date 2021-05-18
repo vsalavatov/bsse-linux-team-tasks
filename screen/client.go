@@ -258,7 +258,7 @@ func (c *Client) Do(args []string) {
 			fmt.Println("OK!")
 			return
 		}
-		fmt.Println("Failed to kill the session:", resp)
+		fmt.Println("Failed to kill the session:", resp.Data["reason"])
 	}
 }
 

@@ -6,9 +6,13 @@ Usage:
     ```shell
     $ go run cmd/server.go 
     ```
-    for daemonized run
+    for execution in daemonized mode run
     ```shell
     $ go run cmd/server.go -d
+    ```
+    to terminate daemon run
+    ```shell
+     $ kill -s SIGINT $(cat myscreend.pid)
     ```
 * client
     ```shell
