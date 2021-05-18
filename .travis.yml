@@ -1,7 +1,8 @@
-language: minimal
-before_install:
-  - sudo apt-get install -y curl
-  - curl https://dl.google.com/go/go1.16.1.linux-amd64.tar.gz --output /tmp/go1.16.1.linux-amd64.tar.gz
-  - sudo tar -C /usr/local -zxf /tmp/go1.16.1.linux-amd64.tar.gz
+language: go
+env: GO111MODULE=on
+go:
+  - 1.16.x
+install: true
 
-script: go test ./... -v
+script:
+  - go test -v ./screen/...
