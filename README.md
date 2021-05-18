@@ -23,3 +23,5 @@ Usage:
     ```shell
      $ go run cmd/client.go kill <id>
     ```
+  
+  To detach from session use Ctrl+C
