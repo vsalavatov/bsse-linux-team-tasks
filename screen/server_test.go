@@ -46,6 +46,25 @@ func assertOutput(t *testing.T, expected string, actualBytes []byte) {
 	}
 }
 
+func assertListOutput(t *testing.T, expected map[string]bool, actualBytes []byte) {
+	actual := make(map[string]bool)
+	for _, v := range strings.Split(string(actualBytes), "\n")[1:] {
+		if len(v) != 0 {
+			actual[v] = true
+		}
+	}
+	for k, _ := range actual {
+		if _, ok := expected[k]; !ok {
+			t.Errorf("Unexpected session id: %s\n", k)
+		}
+	}
+	for k, _ := range expected {
+		if _, ok := actual[k]; !ok {
+			t.Errorf("Expected session id %s wasn't detected\n", k)
+		}
+	}
+}
+
 func createClient(input string, writer io.Writer, args []string, port int) *Client {
 	reader := strings.NewReader(input)
 	conn, _ := ConnectToServer(port)
@@ -104,6 +123,7 @@ func Test_new(t *testing.T) {
 	})
 
 	sSigs <- syscall.SIGINT
+	time.Sleep(time.Millisecond * 100)
 }
 
 func Test_attach(t *testing.T) {
@@ -134,6 +154,7 @@ func Test_attach(t *testing.T) {
 	})
 
 	sSigs <- syscall.SIGINT
+	time.Sleep(time.Millisecond * 100)
 }
 
 func Test_kill(t *testing.T) {
@@ -145,14 +166,15 @@ func Test_kill(t *testing.T) {
 		stopClient(createClient("", bytes.NewBuffer(make([]byte, 0, 4096)), []string{"new", "id1"}, port))
 		writer := bytes.NewBuffer(make([]byte, 0, 4096))
 		stopClient(createClient("", writer, []string{"list"}, port))
-		assertOutput(t, "1 sessions:\nid1\n", writer.Bytes())
+		assertListOutput(t, map[string]bool{"id1": true}, writer.Bytes())
 		stopClient(createClient("", bytes.NewBuffer(make([]byte, 0, 4096)), []string{"kill", "id1"}, port))
 		writer = bytes.NewBuffer(make([]byte, 0, 4096))
 		stopClient(createClient("", writer, []string{"list"}, port))
-		assertOutput(t, "0 sessions:\n", writer.Bytes())
+		assertListOutput(t, map[string]bool{}, writer.Bytes())
 	})
 
 	sSigs <- syscall.SIGINT
+	time.Sleep(time.Millisecond * 100)
 }
 
 func Test_list(t *testing.T) {
@@ -163,7 +185,7 @@ func Test_list(t *testing.T) {
 	t.Run("empty session's list", func(t *testing.T) {
 		writer := bytes.NewBuffer(make([]byte, 0, 4096))
 		stopClient(createClient("", writer, []string{"list"}, port))
-		assertOutput(t, "0 sessions:\n", writer.Bytes())
+		assertListOutput(t, map[string]bool{}, writer.Bytes())
 	})
 
 	t.Run("list sessions", func(t *testing.T) {
@@ -171,8 +193,9 @@ func Test_list(t *testing.T) {
 		stopClient(createClient("", bytes.NewBuffer(make([]byte, 0, 4096)), []string{"new", "id2"}, port))
 		writer := bytes.NewBuffer(make([]byte, 0, 4096))
 		stopClient(createClient("", writer, []string{"list"}, port))
-		assertOutput(t, "2 sessions:\nid1\nid2\n", writer.Bytes())
+		assertListOutput(t, map[string]bool{"id1": true, "id2": true}, writer.Bytes())
 	})
 
 	sSigs <- syscall.SIGINT
+	time.Sleep(time.Millisecond * 100)
 }
