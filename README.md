@@ -6,7 +6,7 @@ Usage:
     ```shell
     $ go run cmd/server.go 
     ```
-    for daemonized run (not implemented yet)
+    for daemonized run
     ```shell
     $ go run cmd/server.go -d
     ```

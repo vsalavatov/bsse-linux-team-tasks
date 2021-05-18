@@ -59,7 +59,7 @@ func (s *Server) ListenAndServe() error {
 	term := make(chan bool, 1)
 
 	signal.Notify(s.sigs, os.Interrupt)
-	// signal.Ignore(syscall.SIGCHLD)
+	signal.Ignore(syscall.SIGCHLD)
 
 	go func() {
 		for {
@@ -67,8 +67,7 @@ func (s *Server) ListenAndServe() error {
 			//if x == syscall.SIGURG || x == syscall.SIGTTIN {
 			//	continue
 			//}
-			fmt.Println("Caught", x)
-			fmt.Printf("%v %t %T\n", x, x, x)
+			fmt.Printf("Caught %v %t\n", x, x)
 			break
 		}
 		end <- true
